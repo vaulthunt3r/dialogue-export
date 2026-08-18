@@ -1,0 +1,38 @@
+.chat-archive-picker {
+  position: absolute !important; top: 10px !important; left: max(8px, calc(50% - 430px)) !important;
+  z-index: 20 !important; display: grid !important; place-items: center !important;
+  width: 24px !important; height: 24px !important; padding: 0 !important;
+  border: 1px solid #8b93a1 !important; border-radius: 6px !important;
+  background: Canvas !important; color: CanvasText !important; cursor: pointer !important;
+  font: 700 14px/1 system-ui !important;
+}
+.chat-archive-picker[data-selected="true"] { background: #18b75a !important; border-color: #18b75a !important; color: white !important; }
+.chat-archive-pickable { position: relative !important; }
+.chat-archive-picked { outline: 2px solid color-mix(in srgb, #18c964 70%, transparent) !important; outline-offset: -2px !important; }
+.chat-archive-selection-bar {
+  position: fixed !important; right: 22px !important; bottom: 82px !important; z-index: 2147483647 !important;
+  display: flex !important; align-items: center !important; gap: 10px !important;
+  padding: 9px 10px 9px 14px !important; border: 1px solid #3f4654 !important;
+  border-radius: 9px !important; background: #07100b !important; color: #eafff0 !important;
+  box-shadow: 0 8px 28px #0005 !important; font: 13px/1.3 system-ui, sans-serif !important;
+}
+.chat-archive-progress {
+  position: fixed !important; right: 22px !important; bottom: 22px !important; z-index: 2147483647 !important;
+  width: 280px !important; padding: 11px 13px !important; border: 1px solid #3f4654 !important;
+  border-radius: 9px !important; background: #050b07 !important; color: #eafff0 !important;
+  border-color: #18522e !important; box-shadow: 0 8px 28px #0008, 0 0 18px #16c65a20 !important;
+  box-shadow: 0 8px 28px #0005 !important; font: 13px/1.35 system-ui, sans-serif !important;
+}
+.chat-archive-progress-row { display: flex !important; justify-content: space-between !important; gap: 12px !important; margin-bottom: 7px !important; }
+.chat-archive-timeline { display: grid !important; grid-auto-flow: column !important; grid-auto-columns: 1fr !important; align-items: center !important; gap: 3px !important; height: 9px !important; }
+.chat-archive-timeline i { display: block !important; height: 4px !important; border-radius: 3px !important; background: #163321 !important; transition: height .15s ease, background .15s ease !important; }
+.chat-archive-timeline i.done { background: #12b852 !important; box-shadow: 0 0 5px #12d85f66 !important; }
+.chat-archive-timeline i.current { height: 8px !important; background: #55ff91 !important; box-shadow: 0 0 9px #36f27aaa !important; }
+.chat-archive-progress[data-state="error"] .chat-archive-timeline i.done,
+.chat-archive-progress[data-state="error"] .chat-archive-timeline i.current { background: #e66b73 !important; }
+.chat-archive-progress[data-state="done"] .chat-archive-timeline i { background: #28e276 !important; box-shadow: 0 0 6px #28e27688 !important; }
+.chat-archive-selection-bar button {
+  border: 0 !important; border-radius: 6px !important; padding: 7px 12px !important;
+  background: #18a950 !important; color: white !important; cursor: pointer !important;
+  font: 600 13px/1 system-ui, sans-serif !important;
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dialogue Export</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1><img src="../icons/icon-32.png" alt="">Dialogue Export</h1>
+        <p id="status">Checking the open conversation…</p>
+      </div>
+    </header>
+
+    <label class="field">
+      <span>File name</span>
+      <input id="filename" type="text" maxlength="120" autocomplete="off">
+    </label>
+
+    <div class="field">
+      <span>Messages</span>
+      <div class="segmented">
+        <label><input type="radio" name="scope" value="all" checked><span>All</span></label>
+        <label><input type="radio" name="scope" value="selected"><span>Selected</span></label>
+      </div>
+    </div>
+
+    <div class="checks">
+      <label><input id="includeTitle" type="checkbox" checked> Title and date</label>
+      <label><input id="includeLinks" type="checkbox" checked> Links</label>
+    </div>
+
+    <div class="selection-actions">
+      <button id="selectionMode" class="secondary">Select messages</button>
+      <button id="clearSelection" class="ghost">Clear selection</button>
+    </div>
+
+    <div class="formats" aria-label="Export format">
+      <button data-format="txt">TXT</button>
+      <button data-format="md">MD</button>
+      <button data-format="html">HTML</button>
+      <button data-format="json">JSON</button>
+      <button id="pdf">PDF</button>
+    </div>
+    <p id="error" role="alert"></p>
+  </main>
+  <script src="../shared/renderers.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
