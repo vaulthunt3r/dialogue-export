@@ -51,7 +51,7 @@
       if (!frameBody?.innerText?.trim()) { frame.remove(); return; }
       const block = document.createElement('section');
       block.className = 'chat-archive-embedded-block';
-      block.innerHTML = frameBody.innerHTML;
+      block.append(...[...frameBody.childNodes].map(node => node.cloneNode(true)));
       frame.replaceWith(block);
     });
 
@@ -60,7 +60,7 @@
       if (!shadow?.textContent?.trim() || !cloneElements[index]) return;
       const block = document.createElement('section');
       block.className = 'chat-archive-embedded-block';
-      block.innerHTML = shadow.innerHTML;
+      block.append(...[...shadow.childNodes].map(node => node.cloneNode(true)));
       cloneElements[index].append(block);
     });
 

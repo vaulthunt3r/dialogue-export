@@ -71,7 +71,12 @@
     if (!view) {
       view = document.createElement('div');
       view.className = 'chat-archive-progress';
-      view.innerHTML = '<div class="chat-archive-progress-row"><span></span><strong></strong></div><div class="chat-archive-timeline"></div>';
+      const row = document.createElement('div');
+      row.className = 'chat-archive-progress-row';
+      row.append(document.createElement('span'), document.createElement('strong'));
+      const timeline = document.createElement('div');
+      timeline.className = 'chat-archive-timeline';
+      view.append(row, timeline);
       document.body.append(view);
     }
     view.dataset.state = state;
@@ -144,8 +149,13 @@
     if (bar) return;
     bar = document.createElement('div');
     bar.className = 'chat-archive-selection-bar';
-    bar.innerHTML = '<span>Message selection is active</span><button type="button">Done</button>';
-    bar.querySelector('button').addEventListener('click', () => setPicking(false));
+    const label = document.createElement('span');
+    label.textContent = 'Message selection is active';
+    const done = document.createElement('button');
+    done.type = 'button';
+    done.textContent = 'Done';
+    done.addEventListener('click', () => setPicking(false));
+    bar.append(label, done);
     document.body.append(bar);
   }
 
