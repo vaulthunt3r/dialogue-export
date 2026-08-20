@@ -22,6 +22,10 @@ Dialogue Export runs locally in the browser. Conversation content is never uploa
 
 [![Dialogue Export popup](docs/screenshots/dialogue-export-popup.png)](docs/screenshots/dialogue-export-popup.png)
 
+### Export progress
+
+[![Matrix-green export progress](docs/screenshots/dialogue-export-progress.png)](docs/screenshots/dialogue-export-progress.png)
+
 ## Compatibility
 
 - Firefox 142 or later.
