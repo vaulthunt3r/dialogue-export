@@ -18,13 +18,21 @@ Dialogue Export runs locally in the browser. Conversation content is never uploa
 
 ## Compatibility
 
-- Firefox 140 or later.
+- Firefox 142 or later.
 - Desktop Firefox.
 - `https://chatgpt.com/` conversations.
 
 Dialogue Export is an independent project and is not affiliated with or endorsed by OpenAI.
 
-## Install for development
+## Install
+
+1. Open the [latest GitHub release](https://github.com/vaulthunt3r/dialogue-export/releases/latest).
+2. Download `Dialogue-Export-v0.2.0.xpi`.
+3. Open the downloaded file in Firefox and confirm the installation.
+
+The XPI is signed by Mozilla and can be installed permanently in standard Firefox releases.
+
+## Install from source
 
 1. Download or clone this repository.
 2. Open `about:debugging#/runtime/this-firefox` in Firefox.
@@ -32,7 +40,7 @@ Dialogue Export is an independent project and is not affiliated with or endorsed
 4. Choose `manifest.json` from the project root.
 5. Open or refresh a conversation on `chatgpt.com`.
 
-Temporary installations are removed when Firefox restarts. A Mozilla-signed `.xpi` is required for permanent installation in standard Firefox releases.
+Temporary source installations are removed when Firefox restarts.
 
 ## Usage
 
