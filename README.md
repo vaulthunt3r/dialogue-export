@@ -16,6 +16,12 @@ Dialogue Export runs locally in the browser. Conversation content is never uploa
 - Generate a clean printable page for Firefox's **Save to PDF** function.
 - Work completely locally without accounts, analytics, telemetry, or remote processing.
 
+## Screenshots
+
+### Export controls
+
+[![Dialogue Export popup](docs/screenshots/dialogue-export-popup.png)](docs/screenshots/dialogue-export-popup.png)
+
 ## Compatibility
 
 - Firefox 142 or later.
