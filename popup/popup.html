@@ -11,7 +11,7 @@
     <header>
       <div>
         <h1><img src="../icons/icon-32.png" alt="">Dialogue Export</h1>
-        <p id="status">Checking the open conversation…</p>
+        <p id="status" role="status" aria-live="polite">Connecting to the conversation…</p>
       </div>
     </header>
 
@@ -23,19 +23,22 @@
     <div class="field">
       <span>Messages</span>
       <div class="segmented">
-        <label><input type="radio" name="scope" value="all" checked><span>All</span></label>
+        <label><input type="radio" name="scope" value="all" checked><span>All messages</span></label>
         <label><input type="radio" name="scope" value="selected"><span>Selected</span></label>
       </div>
     </div>
 
+    <section id="selectionTools" class="selection-tools" aria-label="Selected messages" hidden>
+      <p id="selectionHint">Choose at least one message to enable export.</p>
+      <div class="selection-actions">
+        <button id="selectionMode" class="secondary">Choose messages</button>
+        <button id="clearSelection" class="ghost" disabled>Clear selection</button>
+      </div>
+    </section>
+
     <div class="checks">
       <label><input id="includeTitle" type="checkbox" checked> Title and date</label>
-      <label><input id="includeLinks" type="checkbox" checked> Links</label>
-    </div>
-
-    <div class="selection-actions">
-      <button id="selectionMode" class="secondary">Select messages</button>
-      <button id="clearSelection" class="ghost">Clear selection</button>
+      <label><input id="includeLinks" type="checkbox" checked> Keep links</label>
     </div>
 
     <div class="formats" aria-label="Export format">
@@ -43,7 +46,7 @@
       <button data-format="md">MD</button>
       <button data-format="html">HTML</button>
       <button data-format="json">JSON</button>
-      <button id="pdf">PDF</button>
+      <button id="pdf" data-format="pdf">PDF</button>
     </div>
     <p id="error" role="alert"></p>
   </main>
