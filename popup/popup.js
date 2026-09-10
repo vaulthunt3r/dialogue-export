@@ -53,7 +53,7 @@ function filename() {
   return `${safeName($('filename').value)}${$('appendDate').checked ? `-${date}` : ''}.${format}`;
 }
 function preferences() {
-  return { scope, format, includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, appendDate: $('appendDate').checked };
+  return { scope, format, includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, includeTimestamps: $('includeTimestamps').checked, appendDate: $('appendDate').checked };
 }
 function savePreferences() {
   const saved = preferences();
@@ -70,6 +70,8 @@ function render() {
   const selected = scope === 'selected';
   document.body.dataset.state = ready && !running ? 'ready' : state;
   $('controls').disabled = !ready || busy || running;
+  $('includeTimestamps').disabled = info?.provider !== 'ChatGPT';
+  text('timestampsHint', info?.provider === 'Gemini' ? 'Message timestamps are currently supported for ChatGPT only.' : 'Local date and time for each message, when available.');
   document.querySelectorAll('[name="scope"]').forEach(input => { input.checked = input.value === scope; });
   document.querySelectorAll('[name="format"]').forEach(input => { input.checked = input.value === format; });
   $('selectionTools').hidden = !selected;
@@ -91,7 +93,7 @@ function render() {
     $('activity').dataset.state = job.state;
     text('activityTitle', job.state === 'error' ? 'Export stopped' : job.label);
     text('elapsed', elapsed(job));
-    text('activityDetail', job.state === 'error' ? job.label : `${job.processed || 0} messages collected${job.state === 'running' ? ' · working in the conversation tab' : job.format === 'pdf' ? ' · save from the print page' : ' · check Firefox’s save dialog or Downloads'}`);
+    text('activityDetail', job.state === 'error' ? job.label : `${job.processed || 0} messages collected${job.state === 'running' ? ' · working in the conversation tab' : job.format === 'pdf' ? ' · save from the print page' : ' · check Firefox’s save dialog or Downloads'}${job.state === 'done' && job.timestampNotice ? ` · ${job.timestampNotice}` : ''}`);
   }
 }
 function acceptInfo(next) {
@@ -107,7 +109,7 @@ async function connect() {
   try {
     const [tabs, saved] = await Promise.all([
       withTimeout(browser.tabs.query({ active: true, currentWindow: true }), 3000, 'Firefox did not return the active tab.'),
-      initialized ? Promise.resolve(null) : withTimeout(browser.storage.local.get(['scope', 'format', 'includeTitle', 'includeLinks', 'appendDate']), 2500, 'Preferences unavailable').catch(() => ({}))
+      initialized ? Promise.resolve(null) : withTimeout(browser.storage.local.get(['scope', 'format', 'includeTitle', 'includeLinks', 'includeTimestamps', 'appendDate']), 2500, 'Preferences unavailable').catch(() => ({}))
     ]);
     if (attempt !== sequence) return;
     const tab = tabs[0];
@@ -117,6 +119,7 @@ async function connect() {
       format = Object.hasOwn(formats, saved.format) ? saved.format : 'md';
       $('includeTitle').checked = saved.includeTitle !== false;
       $('includeLinks').checked = saved.includeLinks !== false;
+      $('includeTimestamps').checked = saved.includeTimestamps === true;
       $('appendDate').checked = saved.appendDate === true;
       initialized = true;
     }
@@ -178,7 +181,7 @@ async function chooseScope(next) {
 }
 document.querySelectorAll('[name="scope"]').forEach(input => input.addEventListener('change', () => chooseScope(input.value)));
 document.querySelectorAll('[name="format"]').forEach(input => input.addEventListener('change', () => { format = input.value; error(); savePreferences(); render(); }));
-['includeTitle', 'includeLinks', 'appendDate'].forEach(id => $(id).addEventListener('change', () => { savePreferences(); render(); }));
+['includeTitle', 'includeLinks', 'includeTimestamps', 'appendDate'].forEach(id => $(id).addEventListener('change', () => { savePreferences(); render(); }));
 $('filename').addEventListener('input', render);
 $('retry').addEventListener('click', connect);
 $('selectionMode').addEventListener('click', async () => {
@@ -205,7 +208,7 @@ $('exportForm').addEventListener('submit', async event => {
   savePreferences();
   const previousJob = info?.exportStatus?.startedAt;
   try {
-    const result = await send({ type: 'BEGIN_EXPORT', job: { format, filename: filename(), options: { selectedOnly: scope === 'selected', includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked } } });
+    const result = await send({ type: 'BEGIN_EXPORT', job: { format, filename: filename(), options: { selectedOnly: scope === 'selected', includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, includeTimestamps: $('includeTimestamps').checked && info.provider === 'ChatGPT' } } });
     if (!result?.ok) throw new Error(result?.error || 'The export could not start.');
     info.activeExport = true;
     info.exportStatus = result.exportStatus || { state: 'running', label: 'Preparing export', startedAt: Date.now(), processed: 0, format };

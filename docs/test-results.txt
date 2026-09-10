@@ -1,24 +1,42 @@
-✔ popup keeps export disabled until the first connection completes (80.370046ms)
-✔ failed connection offers Retry and recovers in the same popup (25.48435ms)
-✔ a never-resolving connection has a bounded timeout (21.284518ms)
-✔ unsupported pages and empty conversations explain the next action (28.881791ms)
-✔ Selected enables only with messages; All ends picking and hides selection tools (24.46527ms)
-✔ format preferences, safe filenames and optional date produce the submitted filename (19.879901ms)
-✔ reopened popup restores live progress, elapsed time and finished state (15.546743ms)
-✔ connection loss disables further exports until reconnect (16.542599ms)
-✔ page picker updates count and accessibility, clear and Escape work without leaking controls into exports (30.686888ms)
-✔ new messages get pickers without a MutationObserver feedback loop; theme follows body and root (44.858507ms)
-✔ content locks duplicate exports and selection changes, then reports success honestly (21.848904ms)
-✔ failed file handoff leaves a readable error that can be dismissed (21.131213ms)
-✔ All still collects the entire already-loaded fixture through the unchanged scan (37.415817ms)
-✔ a rejected new export is not hidden by an older completed export (18.361391ms)
-✔ PDF handoff carries the requested filename and preserves the generated document (14.393787ms)
-✔ an expired PDF has an honest status and no active print button (6.985171ms)
-ℹ tests 16
+✔ timestamps normalize Unix seconds, milliseconds and explicit offsets into the same UTC instant (62.579608ms)
+✔ missing, ambiguous, corrupt and impossible dates are never replaced by the export time (11.688205ms)
+✔ Firefox unwrapped React data is matched by exact id and role even with several answer variants (22.921171ms)
+✔ direct message props and wrapped message records work on the nearest turn (15.667387ms)
+✔ unrelated message time, mismatched role and update_time cannot become creation time (12.022938ms)
+✔ page getters are not invoked, cyclic fibers terminate and inaccessible objects do not break extraction (13.979989ms)
+✔ explicit DOM message metadata is read but dates inside the message body are ignored (14.296995ms)
+✔ disabling timestamps skips React reads and retains the previous message schema (13.165529ms)
+✔ Gemini is exported normally without inferring dates from unrelated internal data (11.51152ms)
+✔ TXT and Markdown show per-message local time plus an honest missing-date note without a document header (8.055598ms)
+✔ HTML and PDF layout contain one semantic time element and preserve all content (23.639087ms)
+✔ JSON uses UTC ISO dates, null for missing dates and counts actual messages without mutating its input (7.644072ms)
+✔ all export formats hide optional timestamps when switched off and complete dates need no warning (6.170954ms)
+✔ popup keeps export disabled until the first connection completes (88.801272ms)
+✔ failed connection offers Retry and recovers in the same popup (31.863628ms)
+✔ a never-resolving connection has a bounded timeout (24.675693ms)
+✔ unsupported pages and empty conversations explain the next action (26.93674ms)
+✔ Selected enables only with messages; All ends picking and hides selection tools (22.88696ms)
+✔ format preferences, safe filenames and optional date produce the submitted filename (19.706858ms)
+✔ reopened popup restores live progress, elapsed time and finished state (18.163567ms)
+✔ connection loss disables further exports until reconnect (18.092432ms)
+✔ page picker updates count and accessibility, clear and Escape work without leaking controls into exports (30.330046ms)
+✔ new messages get pickers without a MutationObserver feedback loop; theme follows body and root (47.820653ms)
+✔ content locks duplicate exports and selection changes, then reports success honestly (19.740759ms)
+✔ failed file handoff leaves a readable error that can be dismissed (21.356077ms)
+✔ All still collects the entire already-loaded fixture through the unchanged scan (43.637244ms)
+✔ a rejected new export is not hidden by an older completed export (13.820023ms)
+✔ PDF handoff carries the requested filename and preserves the generated document (13.718013ms)
+✔ an expired PDF has an honest status and no active print button (6.132577ms)
+✔ message timestamps default off, persist when enabled and travel with the export job (27.961299ms)
+✔ Gemini explains the timestamp limitation and never requests unsupported timestamps (13.318415ms)
+✔ Selected timestamps describe only exported messages and missing dates do not prevent saving (38.897267ms)
+✔ collection retains a known time when metadata disappears but rejects it for a regenerated message id (252.627109ms)
+✔ virtualised conversation batches keep their own timestamps after earlier nodes are removed (156.799291ms)
+ℹ tests 34
 ℹ suites 0
-ℹ pass 16
+ℹ pass 34
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 725.180356
+ℹ duration_ms 1289.456391

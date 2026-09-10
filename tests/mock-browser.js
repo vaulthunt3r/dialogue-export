@@ -12,7 +12,7 @@
   }
   if (scenario === 'selected') saved.scope = 'selected';
   window.browser = {
-    runtime:{ getManifest:()=>({version:'0.5.0'}) },
+    runtime:{ getManifest:()=>({version:'0.5.1'}) },
     storage:{ local:{ get:async()=>saved, set:async next=>{saved={...saved,...next};} } },
     tabs:{ query:async()=>[{id:1,url:'https://chatgpt.com/c/ui-fixture'}], sendMessage:async (_,request)=>{
       if (fail) { fail = false; throw Error('Receiving end does not exist'); }

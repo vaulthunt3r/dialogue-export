@@ -4,6 +4,24 @@ Dialogue Export is a Firefox extension for saving an open ChatGPT or Google Gemi
 
 Everything is processed locally in Firefox. The extension does not upload conversations, use analytics, or send telemetry.
 
+## 0.5.1 — optional message timestamps
+
+This version adds the feature requested in [issue #1](https://github.com/vaulthunt3r/dialogue-export/issues/1). A Mozilla-signed installation package is included with this release as `Dialogue-Export-v0.5.1-signed.xpi`.
+
+Open a ChatGPT conversation and enable **Export options → Include message timestamps**. The option is off by default and remembered for your next export.
+
+- TXT and Markdown place the message's local date and time below the author.
+- HTML and PDF display a small date/time line below the author.
+- JSON stores `createdAt` in UTC ISO 8601 format, for example `2026-09-07T10:42:00.000Z`.
+- If the page does not provide a message's creation time, its text is still exported. The document and completion status explain how many timestamps were available. JSON uses `createdAt: null` for missing times.
+- The existing **Title and date in the document** option still controls the document's export date. It is separate from message timestamps.
+
+Message timestamps currently support **ChatGPT only**. The control is disabled on Gemini with an explanation. Plain Gemini exports continue to work.
+
+Dates are read from message metadata already present on the page and matched to the exact message ID. The extension makes no additional network requests. Internal website structures can change, so timestamp availability is not guaranteed. No time is invented or replaced with the export time.
+
+See [the v0.5.1 verification notes](docs/TIMESTAMPS-v0.5.1.md) for tests and limitations.
+
 ## 0.5.0 — a clearer export interface
 
 Version 0.5.0 makes exporting easier to follow. Choose a format, review your options, and press **Export**. A Mozilla-signed XPI is included in the release assets for permanent installation in Firefox 142 or later.
@@ -27,7 +45,7 @@ Version 0.2.0 could save only the part of a long ChatGPT conversation that was c
 
 Version 0.4.2 introduced the loading routine that was tested successfully during development. Dialogue Export moves through the conversation, requests earlier sections, and remembers discovered messages. Slow loading and website changes can still affect completeness; check the first and last messages in important exports.
 
-If you installed v0.2.0, update to v0.5.0 before exporting long conversations.
+If you installed v0.2.0, update to the latest release before exporting long conversations.
 
 ## Features
 
@@ -63,14 +81,14 @@ Dialogue Export is an independent project and is not affiliated with or endorsed
 ### Permanent installation
 
 1. Open the [latest GitHub release](https://github.com/vaulthunt3r/dialogue-export/releases/latest).
-2. Download `Dialogue-Export-v0.5.0-signed.xpi`.
+2. Download `Dialogue-Export-v0.5.1-signed.xpi` from the release assets.
 3. Open the file in Firefox and confirm the installation.
 
 A permanent installation requires a version signed by Mozilla. If the newest release does not contain a signed `.xpi` yet, use the temporary source installation below while it is being reviewed.
 
 ### Temporary installation from source
 
-1. Extract `Dialogue-Export-v0.5.0.zip` (or the source archive).
+1. Extract `Dialogue-Export-v0.5.1.zip` (or the source archive).
 2. Open `about:debugging#/runtime/this-firefox` in Firefox.
 3. Select **Load Temporary Add-on**.
 4. Choose `manifest.json` from the extracted folder.
@@ -85,7 +103,7 @@ Temporary installations are removed when Firefox restarts.
 3. Leave **All messages** selected to load and collect the open conversation.
 4. To save only part of it, choose **Selected**, select **Choose messages**, and mark the required messages on the page.
 5. Choose TXT, MD, HTML, JSON, or PDF. Selecting a format does not start an export.
-6. Review the file name. Expand **Export options** to control the document title/date, links, and date in the file name.
+6. Review the file name. Expand **Export options** to control the document title/date, links, message timestamps on ChatGPT, and date in the file name.
 7. Click **Export TXT/MD/HTML/JSON** or **Prepare PDF**.
 8. Keep the conversation tab open. You may close the popup and reopen it to see progress.
 9. Complete Firefox's save dialog. “File sent to Firefox” confirms the handoff; check Downloads for the final result.

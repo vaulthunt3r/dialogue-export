@@ -153,11 +153,11 @@
   window.ChatArchiveExtractor = {
     nodes: messageNodes,
     metadata() { return { title: title(), provider: provider(), url: location.href, exportedAt: new Date().toISOString() }; },
-    snapshot({ includeLinks = true } = {}) {
+    snapshot({ includeLinks = true, includeTimestamps = false } = {}) {
       return messageNodes().map((node, index) => {
         const clone = cleanClone(node, includeLinks);
         const plainText = (clone.innerText || clone.textContent || '').trim();
-        return {
+        const item = {
           id: idOf(node, index),
           order: Number((idOf(node, index).match(/(\d+)$/) || [])[1] ?? index),
           role: roleOf(node, index),
@@ -166,10 +166,15 @@
           markdown: includeLinks ? textWithLinks(clone, true) : plainText,
           html: clone.innerHTML.trim()
         };
+        if (includeTimestamps) {
+          item.messageId = window.ChatArchiveMessageTimestamps.messageId(node);
+          item.createdAt = window.ChatArchiveMessageTimestamps.read(node, item.role);
+        }
+        return item;
       }).filter(item => item.text);
     },
-    collect({ selectedOnly = false, includeLinks = true } = {}) {
-      const messages = this.snapshot({ includeLinks }).filter(item => !selectedOnly || item.selected);
+    collect({ selectedOnly = false, includeLinks = true, includeTimestamps = false } = {}) {
+      const messages = this.snapshot({ includeLinks, includeTimestamps }).filter(item => !selectedOnly || item.selected);
       return { title: title(), provider: provider(), url: location.href, exportedAt: new Date().toISOString(), messages };
     }
   };

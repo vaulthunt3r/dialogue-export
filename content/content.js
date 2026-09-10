@@ -29,6 +29,10 @@
   function remember(options = {}) {
     window.ChatArchiveExtractor.snapshot(options).forEach(item => {
       const previous = messageCache.get(item.id);
+      // Virtualised nodes can temporarily lose their metadata. Retain a known
+      // time only for the same exact message, never a different regenerated reply.
+      if (options.includeTimestamps && !item.createdAt && previous?.createdAt && item.messageId &&
+          item.messageId === previous.messageId && item.role === previous.role) item.createdAt = previous.createdAt;
       messageCache.set(item.id, previous?.selected && !item.selected ? { ...item, selected: true } : item);
     });
   }
@@ -235,7 +239,7 @@
     }
     view.dataset.state = state;
     setText(view.querySelector('.chat-archive-progress-title'), label);
-    setText(view.querySelector('.chat-archive-progress-detail'), state === 'error' ? 'Open Dialogue Export to try again.' : `${processed} messages collected${state === 'running' ? ' · keep this tab open' : exportStatus?.format === 'pdf' ? ' · save from the print page' : ' · check the save dialog or Downloads'}`);
+    setText(view.querySelector('.chat-archive-progress-detail'), state === 'error' ? 'Open Dialogue Export to try again.' : `${processed} messages collected${state === 'running' ? ' · keep this tab open' : exportStatus?.format === 'pdf' ? ' · save from the print page' : ' · check the save dialog or Downloads'}${state === 'done' && exportStatus?.timestampNotice ? ` · ${exportStatus.timestampNotice}` : ''}`);
     view.querySelector('.chat-archive-dismiss').hidden = state === 'running';
     // These segments represent loading, collecting, and preparing the file.
     // The site does not tell us the total message count or time remaining.
@@ -260,6 +264,10 @@
       update(1, 'Preparing export');
       const data = await collectComplete(job.options, update);
       if (!data.messages.length) throw new Error(job.options.selectedOnly ? 'No messages selected.' : 'No messages found.');
+      if (job.options.includeTimestamps) {
+        data.messageTimestamps = ChatArchiveTimestamps.summarize(data.messages);
+        exportStatus.timestampNotice = ChatArchiveTimestamps.notice(data.messageTimestamps);
+      }
       update(98, 'Preparing file', data.messages.length);
       const result = await browser.runtime.sendMessage({ type: 'EXPORT_READY', job, data });
       if (!result?.ok) throw new Error(result?.error || 'Firefox could not receive the file.');

@@ -1,10 +1,10 @@
 {
   "name": "dialogue-export",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Local conversation export for Firefox \u2014 development checks",
   "scripts": {
-    "test": "node --test tests/ui.test.cjs"
+    "test": "node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "@sinonjs/fake-timers": "15.4.0",

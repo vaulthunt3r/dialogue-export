@@ -22,7 +22,7 @@ async function popup(config={}) {
   const model = { info:{ ok:true,title:'Weekend ideas',provider:'ChatGPT',count:8,selected:0,picking:false,theme:'light',activeExport:false,exportStatus:null,...config.info },saved:config.saved||{},calls:[],closed:false };
   w.close = () => { model.closed=true; };
   w.browser = {
-    runtime:{getManifest:()=>({version:'0.5.0'})},
+    runtime:{getManifest:()=>({version:'0.5.1'})},
     storage:{local:{get:async()=>copy(model.saved),set:async p=>{model.saved={...model.saved,...p};}}},
     tabs:{query:async()=>[{id:1,url:config.url||'https://chatgpt.com/c/test'}],sendMessage:async(_,req)=>{
       model.calls.push(req);
@@ -103,7 +103,7 @@ function content() {
   const env=environment('<!doctype html><html class="light"><head><title>Weekend ideas</title></head><body><main><article data-testid="conversation-turn-0" data-message-author-role="user"><p>First question</p></article><article data-testid="conversation-turn-1" data-message-author-role="assistant"><p>An answer with a <a href="https://example.com/read">reference</a>.</p></article></main></body></html>');
   const {w}=env;let listener;const sent=[];let readyResult={ok:true};
   w.browser={runtime:{onMessage:{addListener:fn=>{listener=fn;}},sendMessage:async req=>{sent.push(req);return typeof readyResult==='function'?readyResult(req):readyResult;}}};
-  w.eval(read('content/extract.js'));w.eval(read('content/content.js'));
+  w.eval(read('shared/timestamps.js'));w.eval(read('content/timestamps.js'));w.eval(read('content/extract.js'));w.eval(read('content/content.js'));
   return {...env,sent,send:req=>listener(req),result:value=>{readyResult=value;},nodes:()=>w.document.querySelectorAll('[data-message-author-role]')};
 }
 const job={format:'md',filename:'example.md',options:{selectedOnly:true,includeTitle:true,includeLinks:true}};
@@ -173,4 +173,65 @@ test('an expired PDF has an honest status and no active print button',async()=>{
   const p=environment(read('print/print.html'),'https://extension.invalid/print/print.html?id=expired');
   p.w.browser={runtime:{sendMessage:async()=>({ok:false})}};p.w.eval(read('print/print.js'));await p.clock.tickAsync(10);
   assert.equal(p.w.document.getElementById('printButton').disabled,true);assert.match(p.w.document.getElementById('printStatus').textContent,/Could not prepare/);assert.match(p.w.document.getElementById('error').textContent,/expired/);p.close();
+});
+
+test('message timestamps default off, persist when enabled and travel with the export job',async()=>{
+  const p=await popup();await p.clock.tickAsync(10);
+  assert.equal(p.$('includeTimestamps').checked,false);assert.equal(p.$('includeTimestamps').disabled,false);
+  p.$('includeTimestamps').click();await p.clock.tickAsync(10);assert.equal(p.model.saved.includeTimestamps,true);
+  p.$('exportButton').click();await p.clock.tickAsync(10);
+  assert.equal(p.model.calls.find(r=>r.type==='BEGIN_EXPORT').job.options.includeTimestamps,true);
+  const saved=copy(p.model.saved);p.close();
+  const reopened=await popup({saved});await reopened.clock.tickAsync(10);assert.equal(reopened.$('includeTimestamps').checked,true);reopened.close();
+});
+test('Gemini explains the timestamp limitation and never requests unsupported timestamps',async()=>{
+  const p=await popup({info:{provider:'Gemini'},saved:{includeTimestamps:true},url:'https://gemini.google.com/app/example'});await p.clock.tickAsync(10);
+  assert.equal(p.$('includeTimestamps').disabled,true);assert.match(p.$('timestampsHint').textContent,/ChatGPT only/);
+  p.$('exportButton').click();await p.clock.tickAsync(10);
+  assert.equal(p.model.calls.find(r=>r.type==='BEGIN_EXPORT').job.options.includeTimestamps,false);p.close();
+});
+test('Selected timestamps describe only exported messages and missing dates do not prevent saving',async()=>{
+  const c=content();c.nodes()[1].dataset.chatArchiveSelected='true';
+  await c.send({type:'BEGIN_EXPORT',job:{...job,options:{...job.options,includeTimestamps:true}}});await c.clock.tickAsync(20);
+  const ready=c.sent.find(r=>r.type==='EXPORT_READY');assert.equal(ready.data.messages.length,1);
+  assert.equal(ready.data.messages[0].createdAt,null);assert.equal(ready.data.messageTimestamps.total,1);assert.equal(ready.data.messageTimestamps.available,0);
+  const info=await c.send({type:'PING'});assert.equal(info.exportStatus.state,'done');assert.match(info.exportStatus.timestampNotice,/0 of 1/);
+  assert.match(c.w.document.querySelector('.chat-archive-progress-detail').textContent,/Missing times/);
+  const p=await popup({info});await p.clock.tickAsync(10);assert.match(p.$('activityDetail').textContent,/0 of 1/);p.close();c.close();
+});
+test('collection retains a known time when metadata disappears but rejects it for a regenerated message id',async()=>{
+  for(const regenerate of [false,true]){
+    const c=content(),host=c.w.document.querySelector('main'),node=c.nodes()[1];
+    Object.defineProperty(c.w.document,'scrollingElement',{value:host});
+    Object.defineProperties(host,{clientHeight:{value:600},scrollHeight:{value:600},scrollTop:{get:()=>0,set:()=>{}}});
+    node.dataset.messageId='answer-original';node.__reactProps$fixture={message:{id:'answer-original',author:{role:'assistant'},create_time:1788777720}};
+    c.w.setTimeout(()=>{delete node.__reactProps$fixture;if(regenerate)node.dataset.messageId='answer-regenerated';},100);
+    await c.send({type:'BEGIN_EXPORT',job:{...job,options:{...job.options,selectedOnly:false,includeTimestamps:true}}});await c.clock.tickAsync(30000);
+    const data=c.sent.find(r=>r.type==='EXPORT_READY')?.data;assert.ok(data);
+    assert.equal(data.messages[1].createdAt,regenerate?null:'2026-09-07T10:42:00.000Z');
+    c.close();
+  }
+});
+test('virtualised conversation batches keep their own timestamps after earlier nodes are removed',async()=>{
+  const c=content(),w=c.w,host=w.document.querySelector('main');let stage=2,top=1200,pending=false;
+  const show=()=>{
+    const nodes=[];
+    for(let i=stage*2;i<stage*2+2;i++){
+      const article=w.document.createElement('article');article.dataset.testid=`conversation-turn-${i}`;article.dataset.messageAuthorRole=i%2?'assistant':'user';article.dataset.messageId=`message-${i}`;article.textContent=`Message ${i}`;
+      article.__reactFiber$fixture={memoizedProps:{message:{id:`message-${i}`,author:{role:article.dataset.messageAuthorRole},create_time:1788777720+i*60}}};nodes.push(article);
+    }
+    host.replaceChildren(...nodes);
+  };
+  show();Object.defineProperty(w.document,'scrollingElement',{value:host});
+  Object.defineProperties(host,{clientHeight:{value:600},scrollHeight:{value:1800},scrollTop:{
+    get:()=>top,set:value=>{
+      top=Math.max(0,Math.min(1200,value));
+      if(top===0&&stage>0&&!pending){pending=true;w.setTimeout(()=>{stage--;show();top=600;pending=false;},350);}
+      else if(top>=1000&&stage<2&&!pending){stage++;show();top=600;}
+    }
+  }});
+  await c.send({type:'BEGIN_EXPORT',job:{...job,options:{...job.options,selectedOnly:false,includeTimestamps:true}}});await c.clock.tickAsync(60000);
+  const data=c.sent.find(r=>r.type==='EXPORT_READY')?.data;assert.ok(data);assert.equal(data.messages.length,6);assert.equal(data.messageTimestamps.available,6);
+  data.messages.forEach((message,i)=>{assert.equal(message.text,`Message ${i}`);assert.equal(message.createdAt,new Date((1788777720+i*60)*1000).toISOString());});
+  c.close();
 });

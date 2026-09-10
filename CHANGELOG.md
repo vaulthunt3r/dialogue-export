@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.1 — 2026-09-10
+
+### Distribution
+
+- Added the Mozilla-signed `Dialogue-Export-v0.5.1-signed.xpi` for permanent Firefox installation.
+
+### New
+
+- Added optional **Include message timestamps**, requested in issue #1, for ChatGPT exports.
+- Added local date/time beneath each author in TXT, Markdown, HTML, and PDF. JSON stores UTC `createdAt` values.
+- Remembered the timestamp preference, off by default. Explained why the option is disabled for Gemini.
+- Reported timestamp availability in completed export status and in documents with missing dates. Missing times remain absent or `null` in JSON.
+
+### Reliability and privacy
+
+- Matched ChatGPT creation times to exact message IDs and roles, including regenerated-answer variants.
+- Preserved already discovered times when virtualised nodes lose metadata, only for the same message ID.
+- Kept loading/scrolling algorithms unchanged. Added no permissions, page script injection, network requests, or remote code.
+- Added automated tests for dates, all formats, missing metadata, selection, hostile page getters, and virtualised conversation windows.
+
+
 ## 0.5.0 — 2026-09-10
 
 ### Interface and usability
