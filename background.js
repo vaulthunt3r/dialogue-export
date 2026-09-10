@@ -13,7 +13,8 @@ browser.runtime.onMessage.addListener(async request => {
   if (request.type === 'EXPORT_PROGRESS') {
     const value = Math.max(0, Math.min(100, Number(request.percent) || 0));
     await browser.action.setBadgeBackgroundColor({ color: '#149447' });
-    await browser.action.setBadgeText({ text: value < 100 ? String(value) : '✓' });
+    const stage = ['LOAD', 'READ', 'SAVE'].includes(request.stage) ? request.stage : value < 100 ? String(value) : '✓';
+    await browser.action.setBadgeText({ text: stage });
     return { ok: true };
   }
 
@@ -31,7 +32,7 @@ browser.runtime.onMessage.addListener(async request => {
       const content = ChatArchiveRenderers[renderFormat](data, job.options, job.format === 'pdf');
       if (job.format === 'pdf') {
         const id = crypto.randomUUID();
-        printJobs.set(id, content);
+        printJobs.set(id, { content, filename: job.filename });
         setTimeout(() => printJobs.delete(id), 15 * 60 * 1000);
         await browser.tabs.create({ url: browser.runtime.getURL(`print/print.html?id=${encodeURIComponent(id)}`) });
       } else {
@@ -85,7 +86,7 @@ browser.runtime.onMessage.addListener(async request => {
   }
 
   if (request.type === 'GET_PRINT_PAGE') {
-    const content = printJobs.get(request.id);
-    return content ? { ok: true, content } : { ok: false };
+    const entry = printJobs.get(request.id);
+    return entry ? typeof entry === 'string' ? { ok: true, content: entry } : { ok: true, ...entry } : { ok: false };
   }
 });

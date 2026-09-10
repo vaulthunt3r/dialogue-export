@@ -1,79 +1,127 @@
-# Dialogue Export
+# <img src="icons/icon-48.png" width="32" height="32" alt=""> Dialogue Export
 
-Export complete conversations from `chatgpt.com` to Markdown, PDF, HTML, TXT, or JSON directly in Firefox.
+Dialogue Export is a Firefox extension for saving an open ChatGPT or Google Gemini conversation as TXT, Markdown, HTML, JSON, or PDF.
 
-Dialogue Export runs locally in the browser. Conversation content is never uploaded to a server and no analytics or telemetry are included.
+Everything is processed locally in Firefox. The extension does not upload conversations, use analytics, or send telemetry.
+
+## 0.5.0 — a clearer export interface
+
+Version 0.5.0 makes exporting easier to follow. Choose a format, review your options, and press **Export**. A Mozilla-signed XPI is included in the release assets for permanent installation in Firefox 142 or later.
+
+New in this version:
+
+- Choose a format first, then use one explicit **Export** button.
+- Remember the last format and export options.
+- Preview the file name and optionally append today's date.
+- Reconnect from the same popup if the conversation did not respond.
+- See the current export stage, elapsed time, and collected-message count when reopening the popup.
+- Show selection tools only in **Selected**, with a live count and **Clear** on the page. Press **Escape** to finish choosing.
+- Follow page theme changes and show keyboard focus clearly.
+- Carry the suggested PDF filename to the print page.
+
+See [the frontend review](docs/FRONTEND_REVIEW_RU.md) for the findings, changes, and verification limits.
+
+## Important update for v0.2.0 users
+
+Version 0.2.0 could save only the part of a long ChatGPT conversation that was currently loaded on the page. ChatGPT removes older messages from the page while you scroll, so an export could look successful while still being incomplete.
+
+Version 0.4.2 introduced the loading routine that was tested successfully during development. Dialogue Export moves through the conversation, requests earlier sections, and remembers discovered messages. Slow loading and website changes can still affect completeness; check the first and last messages in important exports.
+
+If you installed v0.2.0, update to v0.5.0 before exporting long conversations.
 
 ## Features
 
-- Export an entire open conversation.
-- Select and export individual messages.
-- Save as Markdown, PDF, HTML, TXT, or JSON.
-- Preserve code blocks, tables, lists, links, writing blocks, editable text blocks, and readable embedded content.
-- Scan long virtualized conversations automatically from beginning to end.
-- Continue exporting after the extension popup is closed.
-- Follow collection progress through a Matrix-green conversation timeline and toolbar badge.
-- Generate a clean printable page for Firefox's **Save to PDF** function.
-- Work completely locally without accounts, analytics, telemetry, or remote processing.
+- Export the entire open conversation.
+- Export only messages selected by the user.
+- Support ChatGPT and Google Gemini.
+- Save as TXT, Markdown, HTML, JSON, or PDF.
+- Continue working after the popup is closed.
+- Load and collect long ChatGPT conversations automatically.
+- Preserve ordinary text, paragraphs, lists, and links.
+- Keep link destinations in TXT, Markdown, HTML, PDF, and JSON.
+- Use an interface that follows the conversation page's light or dark theme.
+- Show export progress on the page and on the Firefox toolbar icon.
+- Process everything locally with no accounts, analytics, or external servers.
 
-## Screenshots
+## Interface and local processing
 
-### Export controls
+![Dialogue Export interface overview](docs/screenshots/dialogue-export-interface.png)
 
-[![Dialogue Export popup](docs/screenshots/dialogue-export-popup.png)](docs/screenshots/dialogue-export-popup.png)
+![How Dialogue Export processes a conversation locally](docs/screenshots/dialogue-export-privacy-flow.png)
 
-### Export progress
+These presentation images illustrate the interface with fictional conversation data. For a working interface preview in light and dark themes, open `tests/preview.html` from the source archive.
 
-[![Matrix-green export progress](docs/screenshots/dialogue-export-progress.png)](docs/screenshots/dialogue-export-progress.png)
+## Supported websites
 
-## Compatibility
+- `https://chatgpt.com/`
+- `https://gemini.google.com/`
 
-- Firefox 142 or later.
-- Desktop Firefox.
-- `https://chatgpt.com/` conversations.
+Dialogue Export is an independent project and is not affiliated with or endorsed by OpenAI or Google.
 
-Dialogue Export is an independent project and is not affiliated with or endorsed by OpenAI.
+## Installation
 
-## Install
+### Permanent installation
 
 1. Open the [latest GitHub release](https://github.com/vaulthunt3r/dialogue-export/releases/latest).
-2. Download `Dialogue-Export-v0.2.0.xpi`.
-3. Open the downloaded file in Firefox and confirm the installation.
+2. Download `Dialogue-Export-v0.5.0-signed.xpi`.
+3. Open the file in Firefox and confirm the installation.
 
-The XPI is signed by Mozilla and can be installed permanently in standard Firefox releases.
+A permanent installation requires a version signed by Mozilla. If the newest release does not contain a signed `.xpi` yet, use the temporary source installation below while it is being reviewed.
 
-## Install from source
+### Temporary installation from source
 
-1. Download or clone this repository.
+1. Extract `Dialogue-Export-v0.5.0.zip` (or the source archive).
 2. Open `about:debugging#/runtime/this-firefox` in Firefox.
 3. Select **Load Temporary Add-on**.
-4. Choose `manifest.json` from the project root.
-5. Open or refresh a conversation on `chatgpt.com`.
+4. Choose `manifest.json` from the extracted folder.
+5. Open or refresh a conversation on ChatGPT or Gemini.
 
-Temporary source installations are removed when Firefox restarts.
+Temporary installations are removed when Firefox restarts.
 
-## Usage
+## How to use
 
-1. Open a conversation on `chatgpt.com`.
-2. Select the Dialogue Export toolbar icon.
-3. Choose all messages or selected messages.
-4. Choose TXT, MD, HTML, JSON, or PDF.
-5. Follow the timeline while the conversation is collected.
+1. Open a conversation on ChatGPT or Gemini.
+2. Select the Dialogue Export icon on the Firefox toolbar.
+3. Leave **All messages** selected to load and collect the open conversation.
+4. To save only part of it, choose **Selected**, select **Choose messages**, and mark the required messages on the page.
+5. Choose TXT, MD, HTML, JSON, or PDF. Selecting a format does not start an export.
+6. Review the file name. Expand **Export options** to control the document title/date, links, and date in the file name.
+7. Click **Export TXT/MD/HTML/JSON** or **Prepare PDF**.
+8. Keep the conversation tab open. You may close the popup and reopen it to see progress.
+9. Complete Firefox's save dialog. “File sent to Firefox” confirms the handoff; check Downloads for the final result.
 
-For PDF export, select **Save as PDF** on the generated print page and then choose Firefox's PDF destination.
+For PDF, Dialogue Export opens a printable page. Select **Save as PDF**, then choose Firefox's PDF destination. The print page uses your suggested filename; the final name can also be edited in Firefox.
+
+## Format notes
+
+- **TXT** is best for simple, readable text.
+- **Markdown** adds headings for User and ChatGPT or Gemini and writes links as `[label](URL)`.
+- **HTML** preserves more visual structure and clickable links.
+- **JSON** contains message metadata, text, and cleaned HTML.
+- **PDF** creates a print-friendly document through Firefox.
+
+Dialogue Export is designed primarily for ordinary text conversations. Complex interactive canvases, generated applications, and some embedded media may not be reproduced exactly.
 
 ## Privacy
 
-Dialogue Export processes conversation content only in the local browser. It does not collect, transmit, sell, or share personal data. See [PRIVACY.md](PRIVACY.md).
+Conversation content is read only when the user starts an export. Processing occurs inside Firefox, and the result is passed directly to Firefox's download or print interface. See [PRIVACY.md](PRIVACY.md).
 
 ## Project structure
 
-- `content/extract.js` — conversation discovery, cleaning, and special-block extraction.
-- `content/content.js` — collection workflow, message selection, scrolling, and progress timeline.
-- `shared/renderers.js` — TXT, Markdown, HTML, JSON, and printable-document renderers.
-- `background.js` — background downloads, PDF handoff, and toolbar progress.
-- `popup/` — export controls.
-- `print/` — Firefox print and PDF page.
+- `content/extract.js` — detects messages and prepares their content.
+- `content/content.js` — handles collection, scrolling, selection, and progress.
+- `shared/renderers.js` — creates TXT, Markdown, HTML, JSON, and printable output.
+- `background.js` — handles downloads, PDF handoff, and the toolbar badge.
+- `popup/` — extension controls.
+- `print/` — printable PDF page.
+
+## Development checks
+
+Install the pinned development dependencies with `npm install`, then run `npm test` (Node.js 18 or later). These dependencies are for tests only; the extension has no runtime npm dependencies or build step.
+
+The tests simulate WebExtension messages and page DOMs. They do not replace testing a signed extension, the real Firefox download/print dialogs, or a long conversation in a logged-in ChatGPT/Gemini session.
+
+To validate an installation package with Mozilla's linter, run `npx web-ext lint --source-dir . --ignore-files 'tests/**' 'docs/**' 'package*.json'`. Keep test fixtures and development dependencies out of the package submitted for signing.
 
 ## License
 

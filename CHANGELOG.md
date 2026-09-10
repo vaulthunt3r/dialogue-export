@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.0 — 2026-09-10
+
+### Interface and usability
+
+- Added an explicit Export button after format selection, with short format descriptions.
+- Remembered format, scope, link/title options, and optional date suffix.
+- Added safe filename preview, including Windows reserved names.
+- Added bounded connection attempts, an in-popup Retry action, and actionable empty/unsupported-page states.
+- Restored active export status when reopening the popup: stage, elapsed time, and collected count.
+- Replaced misleading total-message estimates with collected counts and phase indicators. Toolbar stages are LOAD, READ, and SAVE.
+- Blocked duplicate exports and selection changes during an export.
+- Added live selected count, Clear, Escape, and pressed-state labels to page selection controls.
+- Updated open controls when the page theme changes; fixed transparent-background detection and selection outlines.
+- Added keyboard focus indicators and reduced-motion styles.
+- Passed the requested PDF filename to the print page and corrected loading/error text.
+
+### Distribution
+
+- Added a Mozilla-signed XPI for permanent installation.
+- Refreshed the README with interface and local-processing presentation images.
+
+### Scope and verification
+
+- Retained v0.4.2 scrolling/loading routines, extractor, and document renderers.
+- Added 16 automated UI/message-flow tests with synthetic conversations.
+- Automated checks use synthetic conversations. Real Firefox download/print dialogs and live website behavior still require manual testing.
+
 ## 0.4.2 — 2026-08-29
 
 ### Important fix

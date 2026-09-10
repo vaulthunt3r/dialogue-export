@@ -35,7 +35,7 @@
 .chat-archive-picker:hover { background: var(--archive-bg-hover) !important; }
 .chat-archive-picker[data-selected="true"] { background: var(--archive-primary) !important; border-color: var(--archive-primary) !important; color: var(--archive-primary-text) !important; }
 .chat-archive-pickable { position: relative !important; }
-.chat-archive-picked { outline: 2px solid color-mix(in srgb, var(--archive-accent) 65%, transparent) !important; outline-offset: -2px !important; }
+.chat-archive-picked { outline: 2px solid #10a37fa6 !important; outline-offset: -2px !important; }
 .chat-archive-selection-bar {
   position: fixed !important; right: 22px !important; bottom: 72px !important; z-index: 2147483647 !important;
   display: flex !important; align-items: center !important; gap: 12px !important;
@@ -48,6 +48,9 @@
   background: var(--archive-primary) !important; color: var(--archive-primary-text) !important;
   cursor: pointer !important; font: 600 13px/1 system-ui, sans-serif !important;
 }
+.chat-archive-selection-bar .chat-archive-clear { background: transparent !important; color: var(--archive-text) !important; }
+.chat-archive-selection-bar button:disabled { opacity: .45 !important; cursor: default !important; }
+.chat-archive-picker:focus-visible, .chat-archive-selection-bar button:focus-visible, .chat-archive-dismiss:focus-visible { outline: 2px solid #10a37f !important; outline-offset: 3px !important; }
 .chat-archive-progress {
   position: fixed !important; right: 24px !important; bottom: 22px !important; z-index: 2147483647 !important;
   width: min(300px, calc(100vw - 48px)) !important; padding: 0 !important; border: 0 !important;
@@ -55,10 +58,14 @@
   box-shadow: none !important; font: 12px/1.35 system-ui, sans-serif !important;
 }
 .chat-archive-progress-row {
-  display: flex !important; justify-content: space-between !important; gap: 12px !important; margin-bottom: 7px !important;
+  display: flex !important; align-items: center !important; justify-content: space-between !important; gap: 10px !important; margin-bottom: 5px !important;
   color: var(--archive-muted) !important; text-shadow: 0 1px 2px var(--archive-bg) !important;
 }
-.chat-archive-progress-row strong { color: var(--archive-text) !important; font-weight: 600 !important; }
+.chat-archive-progress-title { flex: 1 !important; color: var(--archive-text) !important; font-weight: 600 !important; overflow-wrap: anywhere !important; }
+.chat-archive-elapsed { flex-shrink: 0 !important; font-variant-numeric: tabular-nums !important; }
+.chat-archive-progress-detail { font-size: 11px !important; color: var(--archive-muted) !important; margin-bottom: 7px !important; text-shadow: 0 1px 2px var(--archive-bg) !important; }
+.chat-archive-dismiss { border: 0 !important; padding: 0 !important; background: transparent !important; color: var(--archive-text) !important; width: 24px !important; height: 24px !important; cursor: pointer !important; font: 20px/1 system-ui,sans-serif !important; }
+.chat-archive-dismiss[hidden] { display: none !important; }
 .chat-archive-timeline {
   display: grid !important; grid-auto-flow: column !important; grid-auto-columns: 1fr !important;
   align-items: center !important; gap: 2px !important; height: 8px !important;
@@ -68,10 +75,13 @@
   background: var(--archive-track) !important; transition: background .15s ease, transform .15s ease !important;
 }
 .chat-archive-timeline i.done { background: var(--archive-accent) !important; }
-.chat-archive-timeline i.current { height: 6px !important; border-radius: 50% !important; background: var(--archive-accent) !important; transform: scaleX(.75) !important; }
+.chat-archive-timeline i.current { height: 3px !important; background: var(--archive-accent) !important; animation: chat-archive-pulse 1.6s ease-in-out infinite alternate !important; }
+@keyframes chat-archive-pulse { from { opacity: .3; } to { opacity: 1; } }
 .chat-archive-progress[data-state="error"] .chat-archive-timeline i.done,
 .chat-archive-progress[data-state="error"] .chat-archive-timeline i.current { background: #e5484d !important; }
 .chat-archive-progress[data-state="done"] .chat-archive-timeline i { background: var(--archive-accent) !important; }
+.chat-archive-progress[data-state="error"] .chat-archive-progress-title { color: #d14343 !important; }
+@media (prefers-reduced-motion: reduce) { .chat-archive-timeline i { animation: none !important; transition: none !important; } }
 @media (max-width: 600px) {
   .chat-archive-selection-bar { right: 12px !important; bottom: 66px !important; }
   .chat-archive-progress { right: 16px !important; bottom: 16px !important; }

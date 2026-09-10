@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Dialogue Export",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Export ChatGPT and Gemini conversations to TXT, Markdown, HTML, JSON, or PDF.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -9,8 +9,15 @@
     "48": "icons/icon-48.png",
     "96": "icons/icon-96.png"
   },
-  "permissions": ["activeTab", "downloads", "storage"],
-  "host_permissions": ["https://chatgpt.com/*", "https://gemini.google.com/*"],
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*"
+  ],
   "action": {
     "default_title": "Dialogue Export",
     "default_icon": {
@@ -20,13 +27,24 @@
     "default_popup": "popup/popup.html"
   },
   "background": {
-    "scripts": ["shared/renderers.js", "background.js"]
+    "scripts": [
+      "shared/renderers.js",
+      "background.js"
+    ]
   },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*", "https://gemini.google.com/*"],
-      "js": ["content/extract.js", "content/content.js"],
-      "css": ["content/content.css"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "content/extract.js",
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -35,7 +53,9 @@
       "id": "dialogue-export@extension",
       "strict_min_version": "142.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   }

@@ -9,8 +9,9 @@
 <body>
   <aside class="toolbar">
     <div>
-      <strong>Your PDF layout is ready</strong>
+      <strong id="printStatus" role="status">Preparing your PDF layout…</strong>
       <span>Click the button, then choose “Save to PDF” in Firefox.</span>
+      <span id="suggestedName" hidden></span>
     </div>
     <button id="printButton" type="button" disabled>Save as PDF</button>
   </aside>

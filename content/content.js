@@ -3,21 +3,25 @@
   let observer;
   const messageCache = new Map();
   let activeExport = false;
-
+  let exportStatus = null;
+  let uiTimer;
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function pageTheme() {
-    const root = document.documentElement;
-    const declared = `${root.dataset.theme || ''} ${root.className || ''}`.toLowerCase();
-    if (/\b(dark|night)\b/.test(declared)) return 'dark';
-    if (/\b(light|day)\b/.test(declared)) return 'light';
-    const scheme = getComputedStyle(root).colorScheme;
-    if (scheme === 'dark') return 'dark';
-    const background = getComputedStyle(document.body).backgroundColor;
-    const channels = background.match(/[\d.]+/g)?.slice(0, 3).map(Number);
-    if (channels?.length === 3) {
-      const luminance = (channels[0] * 299 + channels[1] * 587 + channels[2] * 114) / 1000;
-      return luminance < 128 ? 'dark' : 'light';
+    const roots = [document.documentElement, document.body].filter(Boolean);
+    for (const root of roots) {
+      const declared = `${root.dataset.theme || ''} ${root.className || ''}`.toLowerCase();
+      if (/\b(dark|night)\b/.test(declared)) return 'dark';
+      if (/\b(light|day)\b/.test(declared)) return 'light';
+    }
+    for (const root of [...roots].reverse()) {
+      const style = getComputedStyle(root);
+      if (style.colorScheme === 'dark' || style.colorScheme === 'light') return style.colorScheme;
+      const channels = style.backgroundColor.match(/[\d.]+/g)?.map(Number);
+      // A transparent body is not a black background.
+      if (channels?.length >= 3 && (channels.length < 4 || channels[3] > 0.5)) {
+        return (channels[0] * 299 + channels[1] * 587 + channels[2] * 114) / 1000 < 128 ? 'dark' : 'light';
+      }
     }
     return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
@@ -179,113 +183,163 @@
     return { ...metadata, messages };
   }
 
-  function progressView(percent, label, state = 'running', processed = 0, total = 0) {
+  function setText(node, value) {
+    if (node.textContent !== value) node.textContent = value;
+  }
+
+  function syncAppearance() {
+    const theme = pageTheme();
+    document.querySelectorAll('.chat-archive-picker, .chat-archive-selection-bar, .chat-archive-progress').forEach(node => {
+      if (node.dataset.theme !== theme) node.dataset.theme = theme;
+    });
+    const elapsed = document.querySelector('.chat-archive-elapsed');
+    if (elapsed && exportStatus) {
+      const seconds = Math.max(0, Math.floor(((exportStatus.finishedAt ?? Date.now()) - exportStatus.startedAt) / 1000));
+      setText(elapsed, `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
+    }
+    if (!picking && !activeExport && !document.querySelector('.chat-archive-progress')) {
+      clearInterval(uiTimer); uiTimer = null;
+    }
+  }
+  function watchAppearance() {
+    syncAppearance();
+    if (!uiTimer) uiTimer = setInterval(syncAppearance, 1000);
+  }
+
+  function progressView(percent, label, state = 'running', processed = 0) {
     let view = document.querySelector('.chat-archive-progress');
     if (!view) {
       view = document.createElement('div');
       view.className = 'chat-archive-progress';
+      view.setAttribute('role', 'region');
+      view.setAttribute('aria-label', 'Dialogue Export progress');
       const row = document.createElement('div');
       row.className = 'chat-archive-progress-row';
-      row.append(document.createElement('span'), document.createElement('strong'));
+      const title = document.createElement('span');
+      title.className = 'chat-archive-progress-title';
+      title.setAttribute('role', 'status');
+      const elapsed = document.createElement('span');
+      elapsed.className = 'chat-archive-elapsed';
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button'; dismiss.className = 'chat-archive-dismiss';
+      dismiss.textContent = '×'; dismiss.setAttribute('aria-label', 'Dismiss export status');
+      dismiss.addEventListener('click', () => { view.remove(); syncAppearance(); });
+      row.append(title, elapsed, dismiss);
+      const detail = document.createElement('div'); detail.className = 'chat-archive-progress-detail';
       const timeline = document.createElement('div');
       timeline.className = 'chat-archive-timeline';
-      view.append(row, timeline);
+      timeline.setAttribute('aria-hidden', 'true');
+      for (let index = 0; index < 3; index++) timeline.append(document.createElement('i'));
+      view.append(row, detail, timeline);
       document.body.append(view);
     }
-    view.dataset.theme = pageTheme();
     view.dataset.state = state;
-    view.querySelector('span').textContent = label;
-    view.querySelector('strong').textContent = state === 'error' ? 'Error' : processed ? `${processed}${total ? ` / ${total}` : ''}` : `${percent}%`;
-    const segmentCount = total > 0 && total <= 32 ? total : 32;
-    const completed = state === 'done' ? segmentCount : total > 0 ? Math.min(segmentCount, Math.floor((processed / total) * segmentCount)) : Math.floor((percent / 100) * segmentCount);
-    const timeline = view.querySelector('.chat-archive-timeline');
-    if (timeline.children.length !== segmentCount) timeline.replaceChildren(...Array.from({ length: segmentCount }, () => document.createElement('i')));
-    [...timeline.children].forEach((segment, index) => {
-      segment.className = index < completed ? 'done' : index === completed && state === 'running' ? 'current' : '';
+    setText(view.querySelector('.chat-archive-progress-title'), label);
+    setText(view.querySelector('.chat-archive-progress-detail'), state === 'error' ? 'Open Dialogue Export to try again.' : `${processed} messages collected${state === 'running' ? ' · keep this tab open' : exportStatus?.format === 'pdf' ? ' · save from the print page' : ' · check the save dialog or Downloads'}`);
+    view.querySelector('.chat-archive-dismiss').hidden = state === 'running';
+    // These segments represent loading, collecting, and preparing the file.
+    // The site does not tell us the total message count or time remaining.
+    const stage = percent < 20 ? 0 : percent < 98 ? 1 : 2;
+    [...view.querySelector('.chat-archive-timeline').children].forEach((segment, index) => {
+      segment.className = state === 'done' || index < stage ? 'done' : state === 'running' && index === stage ? 'current' : '';
     });
+    watchAppearance();
     return view;
   }
 
   async function runExport(job) {
-    if (activeExport) throw new Error('An export is already running.');
     activeExport = true;
-    const startedAt = Date.now();
+    setPicking(false);
+    exportStatus = { state: 'running', label: 'Preparing export', format: job.format, processed: 0, startedAt: Date.now() };
     try {
-      const update = (percent, label, processed = 0, total = 0) => {
-        progressView(percent, label, 'running', processed, total);
-        browser.runtime.sendMessage({ type: 'EXPORT_PROGRESS', percent }).catch(() => {});
+      const update = (percent, label, processed = 0) => {
+        Object.assign(exportStatus, { label, processed });
+        progressView(percent, label, 'running', processed);
+        browser.runtime.sendMessage({ type: 'EXPORT_PROGRESS', percent, stage: percent < 20 ? 'LOAD' : percent < 98 ? 'READ' : 'SAVE' }).catch(() => {});
       };
       update(1, 'Preparing export');
       const data = await collectComplete(job.options, update);
       if (!data.messages.length) throw new Error(job.options.selectedOnly ? 'No messages selected.' : 'No messages found.');
-      update(98, 'Formatting file', data.messages.length, data.messages.length);
+      update(98, 'Preparing file', data.messages.length);
       const result = await browser.runtime.sendMessage({ type: 'EXPORT_READY', job, data });
       if (!result?.ok) throw new Error(result?.error || 'Firefox could not receive the file.');
-      const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-      progressView(100, `${job.format === 'pdf' ? 'Print page opened' : 'File sent to Downloads'} · ${elapsedSeconds}s`, 'done', data.messages.length, data.messages.length);
-      setPicking(false);
-      setTimeout(() => document.querySelector('.chat-archive-progress')?.remove(), 3500);
+      Object.assign(exportStatus, { state: 'done', label: job.format === 'pdf' ? 'Print page opened' : 'File sent to Firefox', finishedAt: Date.now() });
+      const view = progressView(100, exportStatus.label, 'done', data.messages.length);
+      const completedJob = exportStatus;
+      setTimeout(() => { if (exportStatus === completedJob && !activeExport) { view.remove(); syncAppearance(); } }, 15000);
     } catch (error) {
-      progressView(100, error?.message || String(error), 'error');
+      Object.assign(exportStatus, { state: 'error', label: error?.message || String(error), finishedAt: Date.now() });
+      progressView(100, exportStatus.label, 'error', exportStatus.processed);
       browser.runtime.sendMessage({ type: 'EXPORT_FAILED' }).catch(() => {});
     } finally {
       activeExport = false;
     }
   }
 
+  function selectionCount() {
+    return window.ChatArchiveExtractor.nodes().filter(node => node.dataset.chatArchiveSelected === 'true').length;
+  }
+  function updatePicker(node, button) {
+    const selected = node.dataset.chatArchiveSelected === 'true';
+    button.dataset.selected = String(selected);
+    button.setAttribute('aria-pressed', String(selected));
+    button.setAttribute('aria-label', selected ? 'Exclude this message' : 'Include this message');
+    setText(button, selected ? '✓' : '+');
+    node.classList.toggle('chat-archive-picked', picking && selected);
+  }
   function decorate() {
     window.ChatArchiveExtractor.nodes().forEach((node, index) => {
       node.dataset.chatArchiveId ||= `message-${index + 1}`;
       node.classList.toggle('chat-archive-pickable', picking);
       let button = node.querySelector(':scope > .chat-archive-picker');
-      if (!picking) { button?.remove(); return; }
-      if (button) { button.dataset.theme = pageTheme(); return; }
-      button = document.createElement('button');
-      button.className = 'chat-archive-picker';
-      button.dataset.theme = pageTheme();
-      button.type = 'button';
-      button.title = 'Include or exclude this message';
-      const selected = node.dataset.chatArchiveSelected === 'true';
-      button.dataset.selected = String(selected);
-      button.textContent = selected ? '✓' : '+';
-      button.addEventListener('click', event => {
-        event.preventDefault(); event.stopPropagation();
-        const next = node.dataset.chatArchiveSelected !== 'true';
-        node.dataset.chatArchiveSelected = String(next);
-        node.classList.toggle('chat-archive-picked', next);
-        button.dataset.selected = String(next);
-        button.textContent = next ? '✓' : '+';
-      });
-      node.prepend(button);
+      if (!picking) { button?.remove(); node.classList.remove('chat-archive-picked'); return; }
+      if (!button) {
+        button = document.createElement('button');
+        button.className = 'chat-archive-picker'; button.type = 'button';
+        button.title = 'Include or exclude this message';
+        button.addEventListener('click', event => {
+          event.preventDefault(); event.stopPropagation();
+          node.dataset.chatArchiveSelected = String(node.dataset.chatArchiveSelected !== 'true');
+          updatePicker(node, button); selectionBar();
+        });
+        node.prepend(button);
+      }
+      updatePicker(node, button);
     });
   }
 
   function selectionBar() {
     let bar = document.querySelector('.chat-archive-selection-bar');
     if (!picking) { bar?.remove(); return; }
-    if (bar) { bar.dataset.theme = pageTheme(); return; }
-    bar = document.createElement('div');
-    bar.className = 'chat-archive-selection-bar';
-    bar.dataset.theme = pageTheme();
-    const label = document.createElement('span');
-    label.textContent = 'Message selection is active';
-    const done = document.createElement('button');
-    done.type = 'button';
-    done.textContent = 'Done';
-    done.addEventListener('click', () => setPicking(false));
-    bar.append(label, done);
-    document.body.append(bar);
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'chat-archive-selection-bar';
+      bar.setAttribute('role', 'region'); bar.setAttribute('aria-label', 'Message selection');
+      const label = document.createElement('span'); label.setAttribute('role', 'status');
+      const clear = document.createElement('button'); clear.type = 'button'; clear.className = 'chat-archive-clear';
+      clear.textContent = 'Clear'; clear.addEventListener('click', clearSelection);
+      const done = document.createElement('button'); done.type = 'button'; done.textContent = 'Done';
+      done.title = 'Finish choosing messages (Escape)'; done.addEventListener('click', () => setPicking(false));
+      bar.append(label, clear, done); document.body.append(bar);
+    }
+    const count = selectionCount();
+    setText(bar.querySelector('span'), `${count} selected`);
+    bar.querySelector('.chat-archive-clear').disabled = !count;
   }
 
   function setPicking(enabled) {
     picking = Boolean(enabled);
-    decorate();
-    selectionBar();
-    if (picking && !observer) {
-      observer = new MutationObserver(() => { decorate(); selectionBar(); });
+    observer?.disconnect();
+    decorate(); selectionBar();
+    if (picking) {
+      observer ||= new MutationObserver(() => {
+        // Do not observe our own button/count updates.
+        observer.disconnect();
+        if (picking) { decorate(); selectionBar(); syncAppearance(); observer.observe(document.body, { childList: true, subtree: true }); }
+      });
       observer.observe(document.body, { childList: true, subtree: true });
+      watchAppearance();
     }
-    if (!picking) { observer?.disconnect(); observer = null; }
   }
 
   function clearSelection() {
@@ -293,33 +347,47 @@
       delete node.dataset.chatArchiveSelected;
       node.classList.remove('chat-archive-picked');
       const button = node.querySelector(':scope > .chat-archive-picker');
-      if (button) { button.dataset.selected = 'false'; button.textContent = '+'; }
+      if (button) updatePicker(node, button);
     });
+    selectionBar();
   }
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && picking) { event.preventDefault(); event.stopPropagation(); setPicking(false); }
+  });
+
+  window.addEventListener('pagehide', () => {
+    observer?.disconnect();
+    clearInterval(uiTimer); uiTimer = null;
+  });
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) {
+      if (picking) setPicking(true);
+      if (activeExport || document.querySelector('.chat-archive-progress')) watchAppearance();
+    }
+  });
 
   browser.runtime.onMessage.addListener(request => {
     if (request.type === 'PING') {
       const nodes = window.ChatArchiveExtractor.nodes();
       const metadata = window.ChatArchiveExtractor.metadata();
-      return Promise.resolve({
-        ok: true,
-        title: metadata.title,
-        count: nodes.length,
-        selected: nodes.filter(node => node.dataset.chatArchiveSelected === 'true').length,
-        picking,
-        provider: metadata.provider,
-        theme: pageTheme()
-      });
+      return Promise.resolve({ ok: true, title: metadata.title, count: nodes.length, selected: selectionCount(), picking,
+        provider: metadata.provider, theme: pageTheme(), activeExport, exportStatus: exportStatus ? { ...exportStatus } : null });
     }
-    if (request.type === 'SET_PICKING') {
-      setPicking(request.enabled);
+    if (request.type === 'SET_PICKING' || request.type === 'CLEAR_SELECTION') {
+      if (activeExport) return Promise.resolve({ ok: false, error: 'Wait for the current export to finish.' });
+      if (request.type === 'SET_PICKING') setPicking(request.enabled); else clearSelection();
       return Promise.resolve({ ok: true });
     }
-    if (request.type === 'CLEAR_SELECTION') { clearSelection(); return Promise.resolve({ ok: true }); }
     if (request.type === 'COLLECT') return collectComplete(request.options);
     if (request.type === 'BEGIN_EXPORT') {
-      runExport(request.job);
-      return Promise.resolve({ ok: true });
+      if (activeExport) return Promise.resolve({ ok: false, error: 'An export is already running.' });
+      const job = request.job;
+      if (!job || !['txt', 'md', 'html', 'json', 'pdf'].includes(job.format) || typeof job.filename !== 'string' || !job.options) {
+        return Promise.resolve({ ok: false, error: 'The export settings are invalid.' });
+      }
+      runExport(job);
+      return Promise.resolve({ ok: true, exportStatus: { ...exportStatus } });
     }
   });
 })();
