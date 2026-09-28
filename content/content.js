@@ -2,6 +2,7 @@
   let picking = false;
   let observer;
   const messageCache = new Map();
+  const messageOrder = [];
   let activeExport = false;
   let exportStatus = null;
   let uiTimer;
@@ -26,8 +27,20 @@
     return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
-  function remember(options = {}) {
-    window.ChatArchiveExtractor.snapshot(options).forEach(item => {
+  function remember(options = {}, earlier = false) {
+    const batch = window.ChatArchiveExtractor.snapshot(options);
+    // Merge visible windows by their shared messages. Disjoint windows loaded
+    // while seeking the beginning precede the cache; forward windows follow it.
+    let cursor = earlier ? 0 : messageOrder.length;
+    batch.forEach((item, index) => {
+      const known = messageOrder.indexOf(item.id);
+      if (known >= 0) cursor = known + 1;
+      else {
+        const nextKnown = batch.slice(index + 1).find(next => messageCache.has(next.id));
+        const position = nextKnown ? messageOrder.indexOf(nextKnown.id) : cursor;
+        messageOrder.splice(position, 0, item.id);
+        cursor = position + 1;
+      }
       const previous = messageCache.get(item.id);
       // Virtualised nodes can temporarily lose their metadata. Retain a known
       // time only for the same exact message, never a different regenerated reply.
@@ -55,12 +68,13 @@
   function scrollHost() { return scrollCandidates()[0] || document.scrollingElement; }
 
   function cacheExpected() {
-    return Math.max(1, ...[...messageCache.values()].map(item => item.order + 1));
+    return Math.max(1, messageCache.size);
   }
 
   function visibleStartSignature() {
     return window.ChatArchiveExtractor.nodes().slice(0, 3).map(node => {
-      const turnId = node.closest?.('[data-testid^="conversation-turn-"]')?.getAttribute('data-testid') || '';
+      const turnId = node.closest?.('[data-turn-key]')?.getAttribute('data-turn-key') ||
+        node.closest?.('[data-testid^="conversation-turn-"]')?.getAttribute('data-testid') || '';
       const text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 180);
       return `${turnId}:${text}`;
     }).join('|');
@@ -83,7 +97,7 @@
 
     while (Date.now() < finalDeadline) {
       await pause(250);
-      remember(options);
+      remember(options, true);
       const signature = visibleStartSignature();
       if (signature && signature !== previousSignature) changed = true;
 
@@ -129,7 +143,7 @@
 
     host.scrollTop = 0;
     await pause(250);
-    remember(options);
+    remember(options, true);
   }
 
   async function collectComplete(options = {}, onProgress = () => {}) {
@@ -143,6 +157,7 @@
     if (!host) return window.ChatArchiveExtractor.collect(options);
     const originalTop = host.scrollTop;
     messageCache.clear();
+    messageOrder.length = 0;
     remember(options);
     let expected = cacheExpected();
     onProgress(2, 'Moving to the start', messageCache.size, expected);
@@ -182,7 +197,7 @@
     }
 
     const metadata = window.ChatArchiveExtractor.metadata();
-    const messages = [...messageCache.values()].sort((a, b) => a.order - b.order);
+    const messages = messageOrder.map((id, order) => ({ ...messageCache.get(id), order }));
     host.scrollTop = originalTop;
     return { ...metadata, messages };
   }

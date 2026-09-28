@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.2 — Unreleased / test build
+
+- Detect user bubbles and assistant message containers in the ChatGPT interface reported in issue #2, while retaining the existing ChatGPT and Gemini selectors.
+- Determine modern message authors from their markers rather than viewport position.
+- Use opaque message/search keys for modern message identity and merge visible batches in DOM order, including earlier disjoint batches. Do not interpret ID suffixes as message positions.
+- Read optional assistant timestamps using the new explicit message ID; ambiguous or unavailable metadata remains missing.
+- Add regression coverage for detection, mixed markup, selection, content preservation, remounts, missing keys, and overlapping/disjoint virtualized windows.
+- Verification: 44 automated tests pass. Live verification on the reporter's interface remains pending; no signed release is published.
+
 ## 0.5.1 — 2026-09-10
 
 ### Distribution

@@ -4,6 +4,14 @@ Dialogue Export is a Firefox extension for saving an open ChatGPT or Google Gemi
 
 Everything is processed locally in Firefox. The extension does not upload conversations, use analytics, or send telemetry.
 
+## 0.5.2 — ChatGPT interface compatibility (test build)
+
+Adds support for the newer ChatGPT message containers reported in issue #2,
+including both authors and ordering across virtualized conversation windows.
+The automated suite passes; verification on the reporter's live interface is
+pending. This build is unsigned and has not been released as a stable version.
+See [installation and verification notes](docs/CHATGPT-UI-v0.5.2.md).
+
 ## 0.5.1 — optional message timestamps
 
 This version adds the feature requested in [issue #1](https://github.com/vaulthunt3r/dialogue-export/issues/1). A Mozilla-signed installation package is included with this release as `Dialogue-Export-v0.5.1-signed.xpi`.
