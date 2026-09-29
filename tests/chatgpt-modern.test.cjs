@@ -108,24 +108,43 @@ test('modern assistant timestamps match exact metadata; user search keys do not 
   } finally { f.close(); }
 });
 
-for (const overlap of [false, true]) test(`modern virtualized windows retain all messages in order (overlap=${overlap})`, async () => {
+for (const config of [
+  { name: 'document, disjoint', overlap: false },
+  { name: 'document, overlap', overlap: true },
+  { name: 'hidden overflow', overflow: 'hidden' },
+  { name: 'small hidden scroll range', overflow: 'hidden', range: 60 },
+  { name: 'negative coordinates at the bottom', overflow: 'auto', reverse: true },
+  { name: 'blocked inner wrapper', overflow: 'auto', blockedInner: true }
+]) test(`modern virtualized windows retain all messages in order (${config.name})`, async () => {
   // Opaque IDs deliberately have suffixes contrary to conversation order.
   const ids = ['z99', 'a80', 'm70', 'b50', 'y20', 'c10'];
   const f = fixture(''), { w, clock } = f, host = w.document.querySelector('main');
-  let stage = 2, top = 1200, pending = false;
+  const { overlap } = config, maximum = config.range || 1200;
+  let stage = 2, top = maximum, pending = false;
+  host.style.overflowY = config.overflow || 'auto';
+  host.style.setProperty('scroll-behavior', 'smooth', 'important');
+  host.style.setProperty('scroll-snap-type', 'y mandatory');
+  if (config.reverse) host.style.flexDirection = 'column-reverse';
   const show = () => {
     const start = overlap ? Math.max(0, stage * 2 - 1) : stage * 2;
-    host.innerHTML = ids.slice(start, stage * 2 + 2).map((id, j) => (start + j) % 2 ? assistant(id, `Message ${start + j}`) : user(id, `Message ${start + j}`)).join('');
+    const html = ids.slice(start, stage * 2 + 2).map((id, j) => (start + j) % 2 ? assistant(id, `Message ${start + j}`) : user(id, `Message ${start + j}`)).join('');
+    host.innerHTML = config.blockedInner ? `<div class="blocked" style="overflow-y:auto">${html}</div>` : `<div>${html}</div>`;
+    if (config.blockedInner) Object.defineProperties(host.firstElementChild, {
+      clientHeight: { value: 600 }, scrollHeight: { value: 1800 },
+      scrollTop: { get: () => 0, set: () => {} }
+    });
   };
   show();
-  Object.defineProperty(w.document, 'scrollingElement', { value: host });
-  Object.defineProperties(host, { clientHeight: { value: 600 }, scrollHeight: { value: 1800 }, scrollTop: {
-    get: () => top, set: value => {
-      top = Math.max(0, Math.min(1200, value));
+  Object.defineProperty(w.document, 'scrollingElement', { value: config.overflow ? w.document.documentElement : host });
+  Object.defineProperties(host, { clientHeight: { value: 600 }, scrollHeight: { value: 600 + maximum }, scrollTop: {
+    get: () => config.reverse ? top - maximum : top, set: value => {
+      // Model instant movement only when the controller disables smooth scroll.
+      if (host.style.getPropertyValue('scroll-behavior') !== 'auto') return;
+      top = Math.max(0, Math.min(maximum, value + (config.reverse ? maximum : 0)));
       if (top === 0 && stage > 0 && !pending) {
         pending = true;
-        w.setTimeout(() => { stage--; show(); top = 600; pending = false; }, 350);
-      } else if (top >= 1000 && stage < 2 && !pending) { stage++; show(); top = 600; }
+        w.setTimeout(() => { stage--; show(); top = maximum / 2; pending = false; }, 350);
+      } else if (top >= maximum * 0.83 && stage < 2 && !pending) { stage++; show(); top = maximum / 2; }
     }
   } });
   try {
@@ -136,5 +155,49 @@ for (const overlap of [false, true]) test(`modern virtualized windows retain all
     assert.deepEqual(copy(data.messages).map(m => m.text), ids.map((_, i) => `Message ${i}`));
     assert.equal(new Set(data.messages.map(m => m.id)).size, 6);
     assert.deepEqual(copy(data.messages).map(m => m.order), [0, 1, 2, 3, 4, 5]);
+    assert.equal(host.scrollTop, config.reverse ? 0 : maximum);
+    assert.equal(host.style.getPropertyValue('scroll-behavior'), 'smooth');
+    assert.equal(host.style.getPropertyPriority('scroll-behavior'), 'important');
+    assert.equal(host.style.getPropertyValue('scroll-snap-type'), 'y mandatory');
+  } finally { f.close(); }
+});
+
+test('unmovable conversation does not silently export only the visible window', async () => {
+  const f = fixture(user('q') + assistant('a')), host = f.w.document.querySelector('main');
+  host.style.overflowY = 'hidden';
+  Object.defineProperties(host, { clientHeight: { value: 600 }, scrollHeight: { value: 1800 }, scrollTop: { get: () => 400, set: () => {} } });
+  Object.defineProperty(f.w.document, 'scrollingElement', { value: f.w.document.documentElement });
+  try {
+    await f.send({ type: 'BEGIN_EXPORT', job: { format: 'json', filename: 'test.json', options: {} } });
+    await f.clock.tickAsync(100);
+    const info = await f.send({ type: 'PING' });
+    assert.equal(info.exportStatus.state, 'error');
+    assert.match(info.exportStatus.label, /could not be scrolled/);
+    assert.equal(f.sent.some(req => req.type === 'EXPORT_READY'), false);
+    assert.equal(host.style.getPropertyValue('scroll-behavior'), '');
+  } finally { f.close(); }
+});
+
+test('mid-export scroll stall stops promptly and restores the position and styles', async () => {
+  const f = fixture(user('q') + assistant('a')), host = f.w.document.querySelector('main');
+  host.style.overflowY = 'auto';
+  host.style.scrollBehavior = 'smooth';
+  let top = 1200;
+  Object.defineProperty(f.w.document, 'scrollingElement', { value: host });
+  Object.defineProperties(host, { clientHeight: { value: 600 }, scrollHeight: { value: 1800 }, scrollTop: {
+    get: () => top, set: value => {
+      // Accept the original position for restoration, but stop at 432 on descent.
+      top = value === 1200 || f.w.Date.now() < 10000 ? Math.max(0, Math.min(1200, value)) : Math.min(432, Math.max(0, value));
+    }
+  } });
+  try {
+    await f.send({ type: 'BEGIN_EXPORT', job: { format: 'json', filename: 'test.json', options: {} } });
+    await f.clock.tickAsync(25000);
+    const info = await f.send({ type: 'PING' });
+    assert.equal(info.exportStatus.state, 'error');
+    assert.match(info.exportStatus.label, /stopped scrolling/);
+    assert.equal(f.sent.some(req => req.type === 'EXPORT_READY'), false);
+    assert.equal(top, 1200);
+    assert.equal(host.style.scrollBehavior, 'smooth');
   } finally { f.close(); }
 });

@@ -7,7 +7,9 @@
 - Use opaque message/search keys for modern message identity and merge visible batches in DOM order, including earlier disjoint batches. Do not interpret ID suffixes as message positions.
 - Read optional assistant timestamps using the new explicit message ID; ambiguous or unavailable metadata remains missing.
 - Add regression coverage for detection, mixed markup, selection, content preservation, remounts, missing keys, and overlapping/disjoint virtualized windows.
-- Verification: 44 automated tests pass. Live verification on the reporter's interface remains pending; no signed release is published.
+- Test build 2: include programmatically scrollable hidden-overflow containers and small scroll ranges; verify that candidate containers actually move. Normalize negative scroll coordinates and temporarily disable smooth scrolling and snapping, restoring the original offset and styles in a finally block.
+- Stop with a specific error when scrolling cannot begin or stalls before the end, rather than waiting through the entire scan loop.
+- Verification: 50 automated tests and 3 real-layout headless Edge scenarios pass. The reporter confirmed short-conversation detection/export with build 1, but reported long-conversation scrolling failure. Build 2 still needs live Firefox verification; no signed release is published.
 
 ## 0.5.1 — 2026-09-10
 

@@ -1,4 +1,4 @@
-# ChatGPT interface compatibility — 0.5.2 test build
+# ChatGPT interface compatibility — 0.5.2 test build 2
 
 Issue: https://github.com/vaulthunt3r/dialogue-export/issues/2
 
@@ -20,10 +20,34 @@ appended. Numeric suffixes of opaque keys are never used to sort messages.
 
 Run `npm install --ignore-scripts` and `npm test`.
 
-44 tests pass, including 10 new tests covering the reported structure, both
+50 tests pass, including 16 new tests covering the reported structure, both
 authors, selection, links/code, mixed markers, remounted nodes, equal text,
 missing stable keys, old ChatGPT/Gemini, exact-ID timestamps, and virtualized
-windows with and without overlap. Existing popup, export and timestamp tests pass.
+windows with and without overlap. Scroll cases include hidden overflow, ranges
+below 100px, negative coordinates, blocked inner wrappers, and stalls. Tests also
+verify restoration of the original scroll offset and inline style priorities.
+Existing popup, export and timestamp tests pass.
+
+An optional real-layout test is available as `node tests/scroll-browser.cjs`
+(requires Playwright and installed Edge; optionally pass the Playwright module
+path as the first argument). Three headless Edge scenarios pass: hidden overflow,
+negative scroll coordinates, and a small hidden scroll range. Each loads three
+virtualized batches and verifies all 12 messages in order. All page requests are
+intercepted with a local fixture; no live ChatGPT traffic is used.
+
+## Long-conversation follow-up
+
+The reporter confirmed that build 1 detects and exports a two-message chat, but
+reported that a longer chat stops at 10 collected messages without scrolling up.
+Their exact scroll container styles and coordinate behavior are still unknown.
+
+Build 2 fixes independently identified assumptions in the old scroll code:
+`overflow: hidden` was excluded despite supporting programmatic scrolling,
+scroll ranges below 100px were excluded, the first candidate was used without
+testing movement, and nonnegative coordinates were assumed. It also bounds
+no-progress failures and restores scroll position/styles on success or error.
+These are tested compatibility fixes, not a claim that the reporter's specific
+long-chat failure has already been reproduced or resolved.
 
 Fixtures reproduce reported attribute placement but use synthetic ID values.
 The actual search-key formats, all message variants, and live scrolling behavior
@@ -33,7 +57,7 @@ search-key strings.
 
 ## Install the unsigned test build
 
-Extract `Dialogue-Export-v0.5.2-test.zip`. In Firefox, open
+Extract `Dialogue-Export-v0.5.2-test2.zip` (or the linked source archive for build 2). In Firefox, open
 `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and select
 the extracted `manifest.json`. Reload the conversation after loading the build.
 Temporary installations disappear after Firefox restarts. This is not a signed
