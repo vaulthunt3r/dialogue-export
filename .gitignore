@@ -4,3 +4,4 @@ web-ext-artifacts/
 .DS_Store
 Thumbs.db
 node_modules/
+release/

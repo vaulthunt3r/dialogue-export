@@ -1,5 +1,6 @@
 (function () {
   const isGemini = location.hostname === 'gemini.google.com';
+  const modernSelector = '[data-user-message-bubble], [data-chatgpt-selection-message-id]';
 
   function messageNodes() {
     if (isGemini) {
@@ -14,7 +15,10 @@
       if (messages.length) return messages;
     }
 
-    const primary = [...document.querySelectorAll('[data-message-author-role]')];
+    const selector = `[data-message-author-role], ${modernSelector}`;
+    // Keep DOM order and avoid counting nested old/new markers twice.
+    const primary = [...document.querySelectorAll(selector)]
+      .filter(node => !node.parentElement?.closest(selector));
     if (primary.length) return primary;
     return [...document.querySelectorAll('article[data-testid^="conversation-turn-"]')];
   }
@@ -27,6 +31,8 @@
     const explicit = node.getAttribute('data-message-author-role') ||
       node.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role');
     if (explicit === 'user' || explicit === 'assistant') return explicit;
+    if (node.matches('[data-user-message-bubble]')) return 'user';
+    if (node.matches('[data-chatgpt-selection-message-id]')) return 'assistant';
     const label = (node.getAttribute('aria-label') || node.textContent.slice(0, 40)).toLowerCase();
     if (label.includes('you said') || label.includes('вы сказали')) return 'user';
     if (label.includes('chatgpt said') || label.includes('chatgpt сказал')) return 'assistant';
@@ -50,6 +56,18 @@
       const container = node.closest('.conversation-container');
       const containerId = container?.id || container?.getAttribute('data-turn-id') || `turn-${Math.floor(index / 2) + 1}`;
       return `gemini-${containerId}-${roleOf(node, index)}`;
+    }
+    if (node.matches(modernSelector) && !node.hasAttribute('data-message-author-role')) {
+      const role = roleOf(node, index);
+      const messageId = node.getAttribute('data-chatgpt-selection-message-id')?.trim();
+      if (messageId) return `chatgpt-${role}-message:${messageId}`;
+      // These values are opaque keys, not numbers or assumed JSON arrays.
+      for (const attribute of ['data-chatgpt-search-message-ids', 'data-chatgpt-search-unit-key', 'data-turn-key']) {
+        const value = node.closest(`[${attribute}]`)?.getAttribute(attribute)?.trim();
+        if (value) return `chatgpt-${role}-${attribute}:${value}`;
+      }
+      // A viewport index would overwrite other messages as ChatGPT virtualizes.
+      throw new Error('ChatGPT messages were detected, but stable message identifiers are unavailable. Please report this interface variant.');
     }
     const turn = node.closest('[data-testid^="conversation-turn-"]') || node.querySelector('[data-testid^="conversation-turn-"]');
     return turn?.getAttribute('data-testid') || node.dataset.chatArchiveId || `message-${index + 1}`;
@@ -159,7 +177,7 @@
         const plainText = (clone.innerText || clone.textContent || '').trim();
         const item = {
           id: idOf(node, index),
-          order: Number((idOf(node, index).match(/(\d+)$/) || [])[1] ?? index),
+          order: index,
           role: roleOf(node, index),
           selected: node.dataset.chatArchiveSelected === 'true',
           text: includeLinks ? textWithLinks(clone) : plainText,

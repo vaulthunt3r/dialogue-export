@@ -4,6 +4,18 @@ Dialogue Export is a Firefox extension for saving an open ChatGPT or Google Gemi
 
 Everything is processed locally in Firefox. The extension does not upload conversations, use analytics, or send telemetry.
 
+## 0.5.2 — ChatGPT interface compatibility
+
+Adds support for the newer ChatGPT message containers reported in issue #2,
+including both authors and ordering across virtualized conversation windows.
+Supports hidden-overflow scroll containers and negative scroll offsets, with an
+explicit error if scrolling stalls. The reporter confirmed that the second build
+exported a 301-message conversation; a quick review found it intact from beginning
+to end, though every message was not individually checked. Thanks to **hexgf** for
+the detailed diagnostics and fast testing. A Mozilla-signed installation package
+is included in the 0.5.2 release as `Dialogue-Export-v0.5.2-signed.xpi`.
+See [installation and verification notes](docs/CHATGPT-UI-v0.5.2.md).
+
 ## 0.5.1 — optional message timestamps
 
 This version adds the feature requested in [issue #1](https://github.com/vaulthunt3r/dialogue-export/issues/1). A Mozilla-signed installation package is included with this release as `Dialogue-Export-v0.5.1-signed.xpi`.
@@ -81,14 +93,14 @@ Dialogue Export is an independent project and is not affiliated with or endorsed
 ### Permanent installation
 
 1. Open the [latest GitHub release](https://github.com/vaulthunt3r/dialogue-export/releases/latest).
-2. Download `Dialogue-Export-v0.5.1-signed.xpi` from the release assets.
+2. Download `Dialogue-Export-v0.5.2-signed.xpi` from the release assets.
 3. Open the file in Firefox and confirm the installation.
 
 A permanent installation requires a version signed by Mozilla. If the newest release does not contain a signed `.xpi` yet, use the temporary source installation below while it is being reviewed.
 
 ### Temporary installation from source
 
-1. Extract `Dialogue-Export-v0.5.1.zip` (or the source archive).
+1. Extract `Dialogue-Export-v0.5.2.zip` (or the source archive).
 2. Open `about:debugging#/runtime/this-firefox` in Firefox.
 3. Select **Load Temporary Add-on**.
 4. Choose `manifest.json` from the extracted folder.

@@ -11,11 +11,13 @@
   }
 
   function messageElement(node) {
-    return node.hasAttribute('data-message-id') ? node : node.querySelector('[data-message-id]');
+    const selector = '[data-message-id], [data-chatgpt-selection-message-id]';
+    return node.matches(selector) ? node : node.querySelector(selector);
   }
 
   function messageId(node) {
-    return messageElement(node)?.getAttribute('data-message-id') || null;
+    const element = messageElement(node);
+    return element?.getAttribute('data-message-id') || element?.getAttribute('data-chatgpt-selection-message-id') || null;
   }
 
   function fromDOM(node) {
@@ -29,7 +31,7 @@
     // A <time> inside the conversation body may be part of the reply itself.
     // Only explicitly marked message metadata outside content is eligible.
     const time = node.querySelector('time[data-message-timestamp][datetime]');
-    if (time && !time.closest('.markdown, .prose, pre, code, [contenteditable], [data-message-content]')) {
+    if (time && !time.closest('.markdown, .prose, pre, code, [contenteditable], [data-message-content], [data-markdown-text-style]')) {
       return ChatArchiveTimestamps.normalize(time.getAttribute('datetime'));
     }
     return null;
@@ -59,7 +61,7 @@
     if (!id) return null;
     const visited = new Set();
     let element = messageElement(node) || node;
-    const turn = element.closest('section[data-turn-id], article[data-testid^="conversation-turn-"]');
+    const turn = element.closest('section[data-turn-id], article[data-testid^="conversation-turn-"], [data-turn-key]');
     for (let level = 0; element && level < 8; level++, element = element.parentElement) {
       try {
         // Firefox exposes page-owned React properties through this DOM wrapper.

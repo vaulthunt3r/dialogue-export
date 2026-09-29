@@ -2,6 +2,7 @@
   let picking = false;
   let observer;
   const messageCache = new Map();
+  const messageOrder = [];
   let activeExport = false;
   let exportStatus = null;
   let uiTimer;
@@ -26,8 +27,20 @@
     return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
-  function remember(options = {}) {
-    window.ChatArchiveExtractor.snapshot(options).forEach(item => {
+  function remember(options = {}, earlier = false) {
+    const batch = window.ChatArchiveExtractor.snapshot(options);
+    // Merge visible windows by their shared messages. Disjoint windows loaded
+    // while seeking the beginning precede the cache; forward windows follow it.
+    let cursor = earlier ? 0 : messageOrder.length;
+    batch.forEach((item, index) => {
+      const known = messageOrder.indexOf(item.id);
+      if (known >= 0) cursor = known + 1;
+      else {
+        const nextKnown = batch.slice(index + 1).find(next => messageCache.has(next.id));
+        const position = nextKnown ? messageOrder.indexOf(nextKnown.id) : cursor;
+        messageOrder.splice(position, 0, item.id);
+        cursor = position + 1;
+      }
       const previous = messageCache.get(item.id);
       // Virtualised nodes can temporarily lose their metadata. Retain a known
       // time only for the same exact message, never a different regenerated reply.
@@ -38,29 +51,91 @@
   }
 
   function scrollCandidates() {
-    const first = window.ChatArchiveExtractor.nodes()[0];
+    const messages = window.ChatArchiveExtractor.nodes();
+    const first = messages[0];
     const candidates = [];
     if (!first) return document.scrollingElement ? [document.scrollingElement] : [];
     let node = first.parentElement;
     while (node) {
       const style = getComputedStyle(node);
-      if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 100) candidates.push(node);
-      if (node === document.body) break;
+      // Hidden overflow permits programmatic scrolling; clip does not. Small
+      // scroll ranges still matter when a virtualizer loads near its boundary.
+      const withinMessage = node.closest('[data-turn-key], [data-message-author-role], article[data-testid^="conversation-turn-"], [data-chatgpt-search-message-ids]');
+      if (!withinMessage && /^(auto|scroll|hidden|overlay)$/.test(style.overflowY) &&
+          node.clientHeight > 0 && node.scrollHeight > node.clientHeight + 1 &&
+          messages.every(message => node.contains(message))) candidates.push(node);
       node = node.parentElement;
     }
     if (document.scrollingElement) candidates.push(document.scrollingElement);
     return [...new Set(candidates)];
   }
 
-  function scrollHost() { return scrollCandidates()[0] || document.scrollingElement; }
+  function scrollHost() {
+    const candidates = scrollCandidates();
+    let blocked = false;
+    for (const node of candidates) {
+      const range = Math.max(0, node.scrollHeight - node.clientHeight);
+      if (range <= 1) continue;
+      const controller = scrollController(node);
+      if (controller.movable) return controller;
+      controller.restore();
+      blocked = true;
+    }
+    if (blocked) throw new Error('The conversation could not be scrolled. Please report this interface variant.');
+    // A short, fully loaded conversation may legitimately have no scroll range.
+    return document.scrollingElement ? scrollController(document.scrollingElement) : null;
+  }
+
+  function scrollController(node) {
+    const originalTop = node.scrollTop;
+    const styles = ['scroll-behavior', 'scroll-snap-type'].map(name =>
+      [name, node.style.getPropertyValue(name), node.style.getPropertyPriority(name)]);
+    node.style.setProperty('scroll-behavior', 'auto', 'important');
+    node.style.setProperty('scroll-snap-type', 'none', 'important');
+    const originalRange = Math.max(0, node.scrollHeight - node.clientHeight);
+    // One-pixel probes distinguish a real scroll host from a clipped wrapper,
+    // and detect negative scroll coordinates even when initially at the bottom.
+    let lower = originalTop, upper = originalTop;
+    if (originalRange > 1) {
+      node.scrollTop = originalTop - 1;
+      lower = node.scrollTop;
+      node.scrollTop = originalTop + 1;
+      upper = node.scrollTop;
+      node.scrollTop = originalTop;
+    }
+    const reversed = Math.min(originalTop, lower, upper) < 0 ||
+      getComputedStyle(node).flexDirection === 'column-reverse';
+    const maximum = () => Math.max(0, node.scrollHeight - node.clientHeight);
+    return {
+      movable: Math.abs(lower - originalTop) > 0.5 || Math.abs(upper - originalTop) > 0.5,
+      get clientHeight() { return node.clientHeight; },
+      get scrollHeight() { return node.scrollHeight; },
+      get scrollTop() { return Math.max(0, Math.min(maximum(), node.scrollTop + (reversed ? maximum() : 0))); },
+      set scrollTop(value) {
+        if (!node.isConnected) throw new Error('The conversation scroll area changed during export. Please retry.');
+        const max = maximum();
+        node.scrollTop = Math.max(0, Math.min(max, value)) - (reversed ? max : 0);
+      },
+      restore() {
+        try { if (node.isConnected) node.scrollTop = originalTop; }
+        finally {
+          for (const [name, value, priority] of styles) {
+            if (value) node.style.setProperty(name, value, priority);
+            else node.style.removeProperty(name);
+          }
+        }
+      }
+    };
+  }
 
   function cacheExpected() {
-    return Math.max(1, ...[...messageCache.values()].map(item => item.order + 1));
+    return Math.max(1, messageCache.size);
   }
 
   function visibleStartSignature() {
     return window.ChatArchiveExtractor.nodes().slice(0, 3).map(node => {
-      const turnId = node.closest?.('[data-testid^="conversation-turn-"]')?.getAttribute('data-testid') || '';
+      const turnId = node.closest?.('[data-turn-key]')?.getAttribute('data-turn-key') ||
+        node.closest?.('[data-testid^="conversation-turn-"]')?.getAttribute('data-testid') || '';
       const text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 180);
       return `${turnId}:${text}`;
     }).join('|');
@@ -83,7 +158,7 @@
 
     while (Date.now() < finalDeadline) {
       await pause(250);
-      remember(options);
+      remember(options, true);
       const signature = visibleStartSignature();
       if (signature && signature !== previousSignature) changed = true;
 
@@ -99,7 +174,10 @@
       // Wait until ChatGPT finishes replacing the visible turn window and
       // applying its automatic scroll-position correction.
       if (changed && stableSamples >= 5) return true;
-      if (!changed && Date.now() >= noChangeDeadline) return false;
+      if (!changed && Date.now() >= noChangeDeadline) {
+        if (host.scrollTop > 8) throw new Error('The conversation did not scroll to the beginning. Please retry or report this interface variant.');
+        return false;
+      }
     }
     return changed;
   }
@@ -129,7 +207,7 @@
 
     host.scrollTop = 0;
     await pause(250);
-    remember(options);
+    remember(options, true);
   }
 
   async function collectComplete(options = {}, onProgress = () => {}) {
@@ -141,25 +219,30 @@
 
     const host = scrollHost();
     if (!host) return window.ChatArchiveExtractor.collect(options);
-    const originalTop = host.scrollTop;
+    try {
+      return await collectFromHost(host, options, onProgress);
+    } finally { host.restore(); }
+  }
+
+  async function collectFromHost(host, options, onProgress) {
     messageCache.clear();
+    messageOrder.length = 0;
     remember(options);
     let expected = cacheExpected();
     onProgress(2, 'Moving to the start', messageCache.size, expected);
 
-    try {
-      await loadConversationStart(host, options, onProgress);
-    } catch (error) {
-      host.scrollTop = originalTop;
-      throw error;
-    }
+    await loadConversationStart(host, options, onProgress);
     expected = Math.max(expected, cacheExpected());
     onProgress(20, 'Collecting messages', messageCache.size, expected);
 
     let unchanged = 0;
     let lastTop = -1;
     let reachedEnd = false;
+    let stalled = 0;
     for (let step = 0; step < 1200; step++) {
+      const before = host.scrollTop;
+      const beforeHeight = host.scrollHeight;
+      const beforeCount = messageCache.size;
       const amount = Math.max(350, Math.floor(host.clientHeight * 0.72));
       host.scrollTop = Math.min(host.scrollTop + amount, host.scrollHeight);
       await pause(180);
@@ -174,16 +257,16 @@
         reachedEnd = true;
         break;
       }
+      stalled = !atEnd && Math.abs(host.scrollTop - before) < 1 && host.scrollHeight === beforeHeight && messageCache.size === beforeCount ? stalled + 1 : 0;
+      if (stalled >= 12) throw new Error('The conversation stopped scrolling before the end. Please retry or report this interface variant.');
     }
 
     if (!reachedEnd) {
-      host.scrollTop = originalTop;
       throw new Error('Could not reach the end of this conversation. Please try the export again.');
     }
 
     const metadata = window.ChatArchiveExtractor.metadata();
-    const messages = [...messageCache.values()].sort((a, b) => a.order - b.order);
-    host.scrollTop = originalTop;
+    const messages = messageOrder.map((id, order) => ({ ...messageCache.get(id), order }));
     return { ...metadata, messages };
   }
 
