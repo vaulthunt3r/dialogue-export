@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.2 — Unreleased / test build
+## 0.5.2 — 2026-09-29
 
 - Detect user bubbles and assistant message containers in the ChatGPT interface reported in issue #2, while retaining the existing ChatGPT and Gemini selectors.
 - Determine modern message authors from their markers rather than viewport position.
@@ -9,7 +9,9 @@
 - Add regression coverage for detection, mixed markup, selection, content preservation, remounts, missing keys, and overlapping/disjoint virtualized windows.
 - Test build 2: include programmatically scrollable hidden-overflow containers and small scroll ranges; verify that candidate containers actually move. Normalize negative scroll coordinates and temporarily disable smooth scrolling and snapping, restoring the original offset and styles in a finally block.
 - Stop with a specific error when scrolling cannot begin or stalls before the end, rather than waiting through the entire scan loop.
-- Verification: 50 automated tests and 3 real-layout headless Edge scenarios pass. The reporter confirmed short-conversation detection/export with build 1, but reported long-conversation scrolling failure. Build 2 still needs live Firefox verification; no signed release is published.
+- Verification: 50 automated tests and 3 real-layout headless Edge scenarios pass. The reporter confirmed successful export of 301 messages using build 2 on the affected interface; a quick review found the file intact from beginning to end, without checking every message individually.
+- Thanks to hexgf for the diagnostics, quick replies, and testing both builds.
+- Includes `Dialogue-Export-v0.5.2-signed.xpi`, a runtime ZIP, a development source ZIP, and SHA-256 checksums. The Mozilla-returned XPI has identical runtime files apart from normalized manifest line endings and added signing metadata.
 
 ## 0.5.1 — 2026-09-10
 

@@ -1,4 +1,4 @@
-# ChatGPT interface compatibility — 0.5.2 test build 2
+# ChatGPT interface compatibility — 0.5.2 verification
 
 Issue: https://github.com/vaulthunt3r/dialogue-export/issues/2
 
@@ -46,8 +46,11 @@ Build 2 fixes independently identified assumptions in the old scroll code:
 scroll ranges below 100px were excluded, the first candidate was used without
 testing movement, and nonnegative coordinates were assumed. It also bounds
 no-progress failures and restores scroll position/styles on success or error.
-These are tested compatibility fixes, not a claim that the reporter's specific
-long-chat failure has already been reproduced or resolved.
+The reporter subsequently confirmed that build 2 successfully exported a
+301-message conversation on the affected interface. A quick review found the
+export intact from beginning to end; they did not check every message individually.
+See https://github.com/vaulthunt3r/dialogue-export/issues/2#issuecomment-5884361059.
+The particular scroll-container configuration has not been independently observed.
 
 Fixtures reproduce reported attribute placement but use synthetic ID values.
 The actual search-key formats, all message variants, and live scrolling behavior
@@ -55,9 +58,22 @@ have not been independently observed. User timestamps remain unavailable where
 the page has no unambiguous explicit message ID. No timestamps are guessed from
 search-key strings.
 
-## Install the unsigned test build
+## Packaging and signed release
 
-Extract `Dialogue-Export-v0.5.2-test2.zip` (or the linked source archive for build 2). In Firefox, open
+The 0.5.2 signing package retains the runtime files tested in build 2. Only release
+documentation and packaging support were updated after that test.
+The Mozilla-returned XPI was compared with that package: 21 files match byte for
+byte, and `manifest.json` differs only in line endings/outer whitespace. The only
+additional entries are under `META-INF`, including Mozilla RSA and COSE signatures.
+The supplied signed file is distributed unchanged under the descriptive release filename.
+Run `powershell -ExecutionPolicy Bypass -File scripts/package.ps1` to generate
+the unsigned XPI, runtime ZIP, complete source ZIP, and SHA-256 checksums under
+`release/0.5.2/`. The script refuses to overwrite an existing output directory.
+After signing, pass `-SignedXpi <returned-file> -OutputDirectory <new-directory>`
+to build the public set with a signed XPI instead of an unsigned one. The supplied
+signed file must be verified against the runtime package before this step.
+
+Extract `Dialogue-Export-v0.5.2.zip`. In Firefox, open
 `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and select
 the extracted `manifest.json`. Reload the conversation after loading the build.
 Temporary installations disappear after Firefox restarts. This is not a signed
