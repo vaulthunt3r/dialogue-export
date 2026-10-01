@@ -6,6 +6,12 @@
   let activeExport = false;
   let exportStatus = null;
   let uiTimer;
+  let collectingUrl = null;
+  function assertConversation() {
+    if (collectingUrl !== null && location.href !== collectingUrl) {
+      throw new Error('The conversation changed during export. Open the intended chat and export again.');
+    }
+  }
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function pageTheme() {
@@ -28,6 +34,7 @@
   }
 
   function remember(options = {}, earlier = false) {
+    assertConversation();
     const batch = window.ChatArchiveExtractor.snapshot(options);
     // Merge visible windows by their shared messages. Disjoint windows loaded
     // while seeking the beginning precede the cache; forward windows follow it.
@@ -211,6 +218,16 @@
   }
 
   async function collectComplete(options = {}, onProgress = () => {}) {
+    if (collectingUrl !== null) throw new Error('An export is already running.');
+    collectingUrl = location.href;
+    try {
+      const result = await collectCurrent(options, onProgress);
+      assertConversation();
+      return result;
+    } finally { collectingUrl = null; }
+  }
+
+  async function collectCurrent(options = {}, onProgress = () => {}) {
     if (options.selectedOnly) {
       const selected = window.ChatArchiveExtractor.collect(options);
       onProgress(75, 'Collecting selected messages', selected.messages.length, selected.messages.length);
@@ -346,6 +363,7 @@
       };
       update(1, 'Preparing export');
       const data = await collectComplete(job.options, update);
+      if (data.url !== location.href) throw new Error('The conversation changed during export. Please retry.');
       if (!data.messages.length) throw new Error(job.options.selectedOnly ? 'No messages selected.' : 'No messages found.');
       if (job.options.includeTimestamps) {
         data.messageTimestamps = ChatArchiveTimestamps.summarize(data.messages);

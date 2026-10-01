@@ -15,7 +15,7 @@ function user(id, text = 'Question') {
 function assistant(id, text = 'Answer') {
   return `<div data-turn-key="turn-${id}"><div data-content-search-turn-key="turn-${id}"><div data-content-search-unit-key="content-${id}" data-chatgpt-search-unit-key="unit-${id}" data-chatgpt-search-message-ids='["${id}"]'><div data-chatgpt-selection-conversation-id="fixture" data-chatgpt-selection-message-id="${id}"><div data-selected-text-overlay-target data-markdown-text-style><p><span>${text}</span></p></div></div></div></div></div>`;
 }
-function fixture(html, url = 'https://chatgpt.com/c/test') {
+function fixture(html, url = 'https://chatgpt.com/c/fixture') {
   const dom = new JSDOM(`<main>${html}</main>`, { url, runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   w.matchMedia = () => ({ matches: false });
@@ -50,6 +50,59 @@ test('authors do not depend on viewport parity or words inside the message', () 
   const f = fixture(assistant('a9', 'You said this') + assistant('a2') + user('q1', 'ChatGPT said this'));
   try { assert.deepEqual(copy(f.extractor.snapshot()).map(m => m.role), ['assistant', 'assistant', 'user']); }
   finally { f.close(); }
+});
+
+test('kept-alive chats and foreign conversation IDs never enter snapshots or selection', () => {
+  const hidden = ['hidden', 'inert', 'aria-hidden="true"', 'style="display:none"', 'style="visibility:hidden"', 'style="content-visibility:hidden"'];
+  const old = hidden.map((attribute, i) => `<section ${attribute}>${user(`old-q${i}`, 'FOREIGN')}${assistant(`old-a${i}`, 'FOREIGN')}</section>`).join('');
+  const foreign = assistant('foreign', 'FOREIGN').replace('conversation-id="fixture"', 'conversation-id="other"');
+  const f = fixture(old + `<section hidden>${foreign}</section>` + `<div style="transform:translateY(2000px)">${user('q', 'Current question')}${assistant('a', 'Current answer')}</div>`);
+  try {
+    const nodes = f.extractor.nodes();
+    assert.equal(nodes.length, 2);
+    nodes.forEach(node => { node.dataset.chatArchiveSelected = 'true'; });
+    for (const selectedOnly of [false, true]) {
+      assert.deepEqual(copy(f.extractor.collect({ selectedOnly })).messages.map(m => m.text), ['Current question', 'Current answer']);
+    }
+  } finally { f.close(); }
+});
+
+test('message previews outside main and hidden legacy fallback are excluded', () => {
+  const f = fixture('<section hidden><article data-testid="conversation-turn-0">FOREIGN</article></section>');
+  try {
+    f.w.document.body.insertAdjacentHTML('beforeend', assistant('preview', 'FOREIGN'));
+    assert.equal(f.extractor.snapshot().length, 0);
+    f.w.document.querySelector('main').insertAdjacentHTML('beforeend', '<article data-testid="conversation-turn-1" aria-label="You said">Current</article>');
+    assert.deepEqual(copy(f.extractor.snapshot()).map(m => m.text), ['Current']);
+  } finally { f.close(); }
+});
+
+test('visible foreign assistant aborts instead of retaining its untagged user bubble', () => {
+  const foreign = assistant('foreign', 'FOREIGN').replace('conversation-id="fixture"', 'conversation-id="other"');
+  const f = fixture(user('foreign-question', 'FOREIGN') + foreign + user('q') + assistant('a'));
+  try { assert.throws(() => f.extractor.collect(), /another conversation/); }
+  finally { f.close(); }
+});
+
+test('navigation during collection aborts before sending any file', async () => {
+  const f = fixture(user('q') + assistant('a'));
+  const host = f.w.document.querySelector('main');
+  host.style.overflowY = 'auto';
+  let top = 600;
+  Object.defineProperty(f.w.document, 'scrollingElement', { value: host });
+  Object.defineProperties(host, {
+    clientHeight: { value: 600 }, scrollHeight: { value: 1200 },
+    scrollTop: { get: () => top, set: value => { top = Math.max(0, Math.min(600, value)); } }
+  });
+  try {
+    await f.send({ type: 'BEGIN_EXPORT', job: { format: 'md', filename: 'test.md', options: {} } });
+    f.w.history.pushState({}, '', '/c/other');
+    await f.clock.tickAsync(2000);
+    assert.equal(f.sent.some(req => req.type === 'EXPORT_READY'), false);
+    assert.ok(f.sent.some(req => req.type === 'EXPORT_FAILED'));
+    host.replaceChildren(); // The new route has removed the old conversation.
+    assert.match((await f.send({ type: 'PING' })).exportStatus.label, /conversation changed/);
+  } finally { f.close(); }
 });
 
 test('mixed old/new markers yield one message each in DOM order', () => {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3 — 2026-10-01
+
+- Exclude hidden/inert ChatGPT message trees and message previews outside the main conversation area without excluding offscreen messages needed for full exports.
+- Stop collection when visible message ownership conflicts with the current conversation URL, rather than saving a potentially mixed conversation.
+- Abort when the page URL changes during collection, before handing the file to Firefox.
+- Add regressions for retained hidden chats, foreign conversation IDs, legacy fallback, selection, and navigation during export. All 54 automated tests pass. The affected user confirmed correct conversation content with 0.5.3 and subsequently reported successful HTML/PDF checks. VPN/DNS causality has not been established.
+- Important: 0.5.2 can include messages from another ChatGPT conversation under the correct title and source URL. Review important previous exports before sharing and re-export affected files with 0.5.3. Other versions have not been assessed for this defect.
+
 ## 0.5.2 — 2026-09-29
 
 - Detect user bubbles and assistant message containers in the ChatGPT interface reported in issue #2, while retaining the existing ChatGPT and Gemini selectors.

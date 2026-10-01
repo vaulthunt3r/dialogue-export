@@ -1,6 +1,6 @@
 {
   "name": "dialogue-export",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "description": "Local conversation export for Firefox \u2014 development checks",
   "scripts": {

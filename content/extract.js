@@ -2,6 +2,28 @@
   const isGemini = location.hostname === 'gemini.google.com';
   const modernSelector = '[data-user-message-bubble], [data-chatgpt-selection-message-id]';
 
+  function activeMessage(node) {
+    // Kept-alive routes and search previews can contain real message markup.
+    // Do not use viewport intersection: offscreen messages still belong in an export.
+    for (let element = node; element; element = element.parentElement) {
+      if (element.hidden || element.hasAttribute('inert') || element.getAttribute('aria-hidden') === 'true') return false;
+      const style = getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden') return false;
+    }
+    if (document.querySelector('main, [role="main"]') && !node.closest('main, [role="main"]')) return false;
+    const conversationId = location.pathname.match(/\/c\/([^/]+)/)?.[1];
+    if (conversationId) {
+      const owner = node.closest('[data-chatgpt-selection-conversation-id]') ||
+        node.querySelector('[data-chatgpt-selection-conversation-id]') ||
+        node.closest('[data-turn-key], article[data-testid^="conversation-turn-"]')?.querySelector('[data-chatgpt-selection-conversation-id]');
+      const id = owner?.getAttribute('data-chatgpt-selection-conversation-id');
+      // User bubbles may not carry an owner ID. Skipping just a foreign assistant
+      // could leave its question in the export, so an ambiguous visible page fails closed.
+      if (id && id !== conversationId) throw new Error('Messages from another conversation are still visible in the page. Reload the intended chat before exporting.');
+    }
+    return true;
+  }
+
   function messageNodes() {
     if (isGemini) {
       const customElements = [...document.querySelectorAll('user-query, model-response')];
@@ -18,9 +40,9 @@
     const selector = `[data-message-author-role], ${modernSelector}`;
     // Keep DOM order and avoid counting nested old/new markers twice.
     const primary = [...document.querySelectorAll(selector)]
-      .filter(node => !node.parentElement?.closest(selector));
+      .filter(node => !node.parentElement?.closest(selector) && activeMessage(node));
     if (primary.length) return primary;
-    return [...document.querySelectorAll('article[data-testid^="conversation-turn-"]')];
+    return [...document.querySelectorAll('article[data-testid^="conversation-turn-"]')].filter(activeMessage);
   }
 
   function roleOf(node, index) {
