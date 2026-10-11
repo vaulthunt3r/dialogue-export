@@ -50,9 +50,15 @@
         <summary>Export options</summary>
         <label class="check"><input id="includeTitle" type="checkbox" checked><span>Title and date in the document</span></label>
         <label class="check"><input id="includeLinks" type="checkbox" checked><span>Keep links</span></label>
+        <label class="check"><input id="includeActivity" type="checkbox" aria-describedby="activityHint"><span>Include Working / Thinking sections</span></label>
+        <p id="activityHint" class="hint">ChatGPT only. Expand sections before exporting. Includes available progress and tool summaries, not vanished content.</p>
         <label class="check"><input id="includeTimestamps" type="checkbox" aria-describedby="timestampsHint"><span>Include message timestamps</span></label>
         <p id="timestampsHint" class="hint">Local date and time for each message, when available.</p>
         <label class="check"><input id="appendDate" type="checkbox"><span>Add today’s date to the file name</span></label>
+        <div id="compactPaginationOption" hidden>
+          <label class="check"><input id="compactPagination" type="checkbox" aria-describedby="compactPaginationHint"><span>Compact PDF pagination</span></label>
+          <p id="compactPaginationHint" class="hint">Print without message boxes so text flows across pages. Applies to PDF and printing exported HTML.</p>
+        </div>
       </details>
     </fieldset>
     <div id="errorBox" class="error-box" hidden><p id="error" role="alert"></p><button id="retry" type="button" hidden>Try connecting again</button></div>

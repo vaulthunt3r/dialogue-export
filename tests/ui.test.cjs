@@ -155,24 +155,54 @@ test('a rejected new export is not hidden by an older completed export',async()=
   await p.clock.tickAsync(10);p.$('exportButton').click();await p.clock.tickAsync(10);
   assert.equal(p.$('errorBox').hidden,false);assert.match(p.$('error').textContent,/Please wait/);assert.equal(p.$('exportButton').disabled,false);p.close();
 });
-test('PDF handoff carries the requested filename and preserves the generated document',async()=>{
+for (const compactPagination of [false,true]) test(`PDF handoff preserves document, filename and pagination (${compactPagination})`,async()=>{
   const env=environment('<html></html>');const {w}=env;let handler;let created;
   w.ChatArchiveRenderers={html:()=>'<html><head><title>Original title</title></head><body><main><article>Readable dialogue</article></main></body></html>'};
   w.browser={runtime:{onMessage:{addListener:fn=>handler=fn},getURL:p=>`https://extension.invalid/${p}`},downloads:{onChanged:{addListener:()=>{}}},action:{setBadgeText:async()=>{},setBadgeBackgroundColor:async()=>{}},tabs:{create:async({url})=>{created=url;}}};
   w.eval(read('background.js'));
-  assert.equal((await handler({type:'EXPORT_READY',job:{...job,format:'pdf',filename:'my-notes-2026-09-10.pdf'},data:{}})).ok,true);
+  assert.equal((await handler({type:'EXPORT_READY',job:{...job,options:{...job.options,compactPagination},format:'pdf',filename:'my-notes-2026-09-10.pdf'},data:{}})).ok,true);
   const id=new URL(created).searchParams.get('id');const result=await handler({type:'GET_PRINT_PAGE',id});
   assert.equal(result.filename,'my-notes-2026-09-10.pdf');
+  assert.equal(result.compactPagination,compactPagination);
   const printEnv=environment(read('print/print.html'),created);printEnv.w.browser={runtime:{sendMessage:async()=>result}};
   printEnv.w.eval(read('print/print.js'));await printEnv.clock.tickAsync(10);
   assert.equal(printEnv.w.document.title,'my-notes-2026-09-10');assert.equal(printEnv.w.document.getElementById('printButton').disabled,false);
   assert.equal(printEnv.w.document.querySelector('#document main').textContent,'Readable dialogue');
+  assert.equal(printEnv.w.document.body.classList.contains('compact-pagination'),compactPagination);
+  assert.match(printEnv.w.document.querySelector('#paginationStatus').textContent,compactPagination?/on —/:/off —/);
   assert.match(printEnv.w.document.getElementById('suggestedName').textContent,/my-notes-2026-09-10.pdf/);printEnv.close();env.close();
 });
 test('an expired PDF has an honest status and no active print button',async()=>{
   const p=environment(read('print/print.html'),'https://extension.invalid/print/print.html?id=expired');
   p.w.browser={runtime:{sendMessage:async()=>({ok:false})}};p.w.eval(read('print/print.js'));await p.clock.tickAsync(10);
   assert.equal(p.w.document.getElementById('printButton').disabled,true);assert.match(p.w.document.getElementById('printStatus').textContent,/Could not prepare/);assert.match(p.w.document.getElementById('error').textContent,/expired/);p.close();
+});
+
+test('compact pagination defaults off, persists, and is sent only for HTML/PDF',async()=>{
+  const p=await popup(); await p.clock.tickAsync(10);
+  assert.equal(p.$('compactPagination').checked,false);
+  assert.equal(p.$('compactPaginationOption').hidden,true);
+  p.radio('format','pdf');
+  assert.equal(p.$('compactPaginationOption').hidden,false);
+  p.$('compactPagination').click(); await p.clock.tickAsync(10);
+  assert.equal(p.model.saved.compactPagination,true);
+  const saved=copy(p.model.saved); p.close();
+  for(const format of ['pdf','html','md','txt','json']) {
+    const q=await popup({saved:{...saved,format}}); await q.clock.tickAsync(10);
+    assert.equal(q.$('compactPagination').checked,true);
+    assert.equal(q.$('compactPaginationOption').hidden,!['pdf','html'].includes(format));
+    q.$('exportButton').click(); await q.clock.tickAsync(10);
+    assert.equal(q.model.calls.find(r=>r.type==='BEGIN_EXPORT').job.options.compactPagination,['pdf','html'].includes(format));
+    q.close();
+  }
+});
+
+test('activity option defaults off, persists, and is disabled for Gemini',async()=>{
+ const p=await popup();await p.clock.tickAsync(10);assert.equal(p.$('includeActivity').checked,false);
+ p.$('includeActivity').click();await p.clock.tickAsync(10);const saved=copy(p.model.saved);
+ p.$('exportButton').click();await p.clock.tickAsync(10);assert.equal(p.model.calls.find(r=>r.type==='BEGIN_EXPORT').job.options.includeActivity,true);p.close();
+ const q=await popup({saved,info:{provider:'Gemini'}});await q.clock.tickAsync(10);assert.equal(q.$('includeActivity').checked,true);assert.equal(q.$('includeActivity').disabled,true);
+ q.$('exportButton').click();await q.clock.tickAsync(10);assert.equal(q.model.calls.find(r=>r.type==='BEGIN_EXPORT').job.options.includeActivity,false);q.close();
 });
 
 test('message timestamps default off, persist when enabled and travel with the export job',async()=>{

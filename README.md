@@ -4,7 +4,14 @@ Dialogue Export is a Firefox extension for saving an open ChatGPT or Google Gemi
 
 Everything is processed locally in Firefox. The extension does not upload conversations, use analytics, or send telemetry.
 
-## Important: update to 0.5.3 and check previous exports
+## 0.5.4 — compact printing and optional activity sections
+
+- **Compact PDF pagination** lets messages continue across pages without message boxes in print. It applies to PDF and printing exported HTML; screen HTML keeps its appearance.
+- **Include Working / Thinking sections** saves available ChatGPT progress text and tool summaries before the associated answer in every format. Expand sections before exporting. Collapsed sections receive a missing-content notice; vanished content cannot be recovered. HTML sections can be collapsed after export. This option is unavailable for Gemini.
+
+Both options are off by default under **Export options**. See [release notes](docs/RELEASE-v0.5.4.md) for validation and limitations. Download the Mozilla-signed XPI from [release 0.5.4](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.4).
+
+## Important: use 0.5.3 or later and check previous exports
 
 **0.5.2 can mix messages from another ChatGPT conversation into an export even when its title and source URL are correct.** Check important previous exports before sharing them and re-export affected files. If an affected file was shared, review and replace or remove that copy where possible.
 
@@ -101,7 +108,7 @@ Dialogue Export is an independent project and is not affiliated with or endorsed
 ### Permanent installation
 
 1. Open the [latest GitHub release](https://github.com/vaulthunt3r/dialogue-export/releases/latest).
-2. Download `Dialogue-Export-v0.5.2-signed.xpi` from the release assets.
+2. Download the `Dialogue-Export-v…-signed.xpi` file from the release assets.
 3. Open the file in Firefox and confirm the installation.
 
 A permanent installation requires a version signed by Mozilla. If the newest release does not contain a signed `.xpi` yet, use the temporary source installation below while it is being reviewed.

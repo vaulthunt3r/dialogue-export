@@ -17,6 +17,11 @@ button.addEventListener('click', () => window.print());
     if (header) target.append(document.importNode(header, true));
     if (main) target.append(document.importNode(main, true));
     if (!main) throw new Error('The conversation content could not be read.');
+    const compact = result.compactPagination === true;
+    document.body.classList.toggle('compact-pagination', compact);
+    document.querySelector('#paginationStatus').textContent = compact
+      ? 'Compact pagination: on — print without message boxes for continuous text flow.'
+      : 'Compact pagination: off — keep messages together when possible.';
     document.title = result.filename ? result.filename.replace(/\.pdf$/i, '') : parsed.title || document.title;
     if (result.filename) {
       const suggestedName = document.querySelector('#suggestedName');

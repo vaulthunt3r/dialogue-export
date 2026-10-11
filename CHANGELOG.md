@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.4 — 2026-10-11
+
+- Add opt-in export of available ChatGPT Working / Thinking sections in all formats (issue #4). HTML uses collapsible details; PDF prints expanded details; TXT/Markdown use headings; JSON includes activity fields. Expand sections before exporting. Collapsed sections get an explicit unavailable-content notice; vanished content is not recovered. Ambiguous associations stop export rather than attaching activity to a nearby answer.
+
+- Compact print mode removes message boxes from layout, retaining author labels and spacing. In the reproduced Firefox case, this reduces 5 pages to 4 and lets the first answer begin on page 1 instead of leaving a large gap. Extracted PDF text matches after whitespace normalization.
+
+- Add optional **Compact PDF pagination** for PDF exports and printing exported HTML (issue #5). It defaults off and is remembered across popup sessions.
+- When enabled, allow message articles to span printed pages; keep headings with following content and prefer keeping code blocks, images and table rows together. On-screen HTML is unchanged. Oversized blocks may still split according to the browser's print engine.
+- Show the active pagination mode in the PDF toolbar. Both new options default off and are remembered.
+- Validation: 62 automated tests; local Edge and Firefox pagination checks; user-confirmed compact PDF output. A supplied real-chat HTML export confirms correct activity association, ordering and no duplicates for an expanded section. Other collapsed sections contain missing-content notices; this does not establish coverage of every ChatGPT layout.
+
 ## 0.5.3 — 2026-10-01
 
 - Exclude hidden/inert ChatGPT message trees and message previews outside the main conversation area without excluding offscreen messages needed for full exports.

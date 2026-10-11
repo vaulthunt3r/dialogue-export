@@ -32,7 +32,7 @@ browser.runtime.onMessage.addListener(async request => {
       const content = ChatArchiveRenderers[renderFormat](data, job.options, job.format === 'pdf');
       if (job.format === 'pdf') {
         const id = crypto.randomUUID();
-        printJobs.set(id, { content, filename: job.filename });
+        printJobs.set(id, { content, filename: job.filename, compactPagination: job.options.compactPagination === true });
         setTimeout(() => printJobs.delete(id), 15 * 60 * 1000);
         await browser.tabs.create({ url: browser.runtime.getURL(`print/print.html?id=${encodeURIComponent(id)}`) });
       } else {

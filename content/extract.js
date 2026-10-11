@@ -1,6 +1,67 @@
 (function () {
   const isGemini = location.hostname === 'gemini.google.com';
   const modernSelector = '[data-user-message-bubble], [data-chatgpt-selection-message-id]';
+  const activityHeader = '[class~="group/activity-header"]';
+  const turnSelector = '[data-turn-key], article[data-testid^="conversation-turn-"]';
+
+  function activityRoots(scope = document, cleaned = false) {
+    const roots = [...scope.querySelectorAll(activityHeader)]
+      .filter(header => cleaned || header.querySelector('button[aria-expanded][aria-labelledby]'))
+      .map(header => header.parentElement);
+    return roots.filter(root => !roots.some(other => other !== root && other.contains(root)));
+  }
+
+  function readActivity(root, includeLinks) {
+    const header = root.querySelector(activityHeader);
+    const button = header.querySelector('button[aria-expanded][aria-labelledby]');
+    const label = document.getElementById(button.getAttribute('aria-labelledby'));
+    const title = (label && header.contains(label) ? label.textContent : header.textContent).trim();
+    const expanded = button.getAttribute('aria-expanded') === 'true';
+    const body = document.createElement('div');
+    if (expanded) {
+      for (const child of root.children) {
+        if (child === header || !activeMessage(child)) continue;
+        // Hidden descendants are not available activity content. Drop controls,
+        // transient layout styles and decorative favicons from the saved section.
+        const originals = [...child.querySelectorAll('*')];
+        // Remove invisible content before cloning again to keep source DOM untouched.
+        const safe = child.cloneNode(true);
+        [...safe.querySelectorAll('*')].forEach((el, i) => {
+          if (!activeMessage(originals[i])) el.remove();
+        });
+        const cleaned = cleanClone(safe, includeLinks);
+        cleaned.querySelectorAll('img,svg,button').forEach(el => el.remove());
+        [cleaned, ...cleaned.querySelectorAll('*')].forEach(el => {
+          el.removeAttribute('style'); el.removeAttribute('class'); el.removeAttribute('id');
+        });
+        body.append(cleaned);
+      }
+    }
+    const textBody = body.cloneNode(true);
+    textBody.querySelectorAll('p,li,pre,h1,h2,h3,h4').forEach(el => el.append(document.createTextNode('\n\n')));
+    return { title: title || 'Working / Thinking', expanded, text: textWithLinks(textBody), markdown: textWithLinks(textBody, true), html: body.innerHTML };
+  }
+
+  function activitiesByMessage(nodes, includeLinks) {
+    const result = new Map();
+    for (const root of activityRoots()) {
+      if (!activeMessage(root)) continue;
+      const containing = nodes.filter(node => node.contains(root));
+      const turn = root.closest(turnSelector);
+      const candidates = containing.length ? containing : turn
+        ? nodes.filter((node, index) => roleOf(node, index) === 'assistant' && node.closest(turnSelector) === turn)
+        : [];
+      // Never attach by proximity: retained routes and virtualized windows make
+      // "the next answer" unsafe. Require one explicitly bounded assistant turn.
+      if (candidates.length !== 1 || roleOf(candidates[0], nodes.indexOf(candidates[0])) !== 'assistant') {
+        throw new Error('A Working / Thinking section could not be safely linked to one assistant message. Turn off Include Working / Thinking sections to export ordinary messages.');
+      }
+      const node = candidates[0];
+      if (!result.has(node)) result.set(node, []);
+      result.get(node).push(readActivity(root, includeLinks));
+    }
+    return result;
+  }
 
   function activeMessage(node) {
     // Kept-alive routes and search previews can contain real message markup.
@@ -193,9 +254,13 @@
   window.ChatArchiveExtractor = {
     nodes: messageNodes,
     metadata() { return { title: title(), provider: provider(), url: location.href, exportedAt: new Date().toISOString() }; },
-    snapshot({ includeLinks = true, includeTimestamps = false } = {}) {
-      return messageNodes().map((node, index) => {
+    snapshot({ includeLinks = true, includeTimestamps = false, includeActivity = false } = {}) {
+      const nodes = messageNodes();
+      const activities = !isGemini && includeActivity ? activitiesByMessage(nodes, includeLinks) : new Map();
+      return nodes.map((node, index) => {
         const clone = cleanClone(node, includeLinks);
+        // Activity is serialized separately and never counted twice in the answer.
+        if (!isGemini) activityRoots(clone, true).forEach(root => root.remove());
         const plainText = (clone.innerText || clone.textContent || '').trim();
         const item = {
           id: idOf(node, index),
@@ -210,11 +275,12 @@
           item.messageId = window.ChatArchiveMessageTimestamps.messageId(node);
           item.createdAt = window.ChatArchiveMessageTimestamps.read(node, item.role);
         }
+        if (activities.has(node)) item.activities = activities.get(node);
         return item;
       }).filter(item => item.text);
     },
-    collect({ selectedOnly = false, includeLinks = true, includeTimestamps = false } = {}) {
-      const messages = this.snapshot({ includeLinks, includeTimestamps }).filter(item => !selectedOnly || item.selected);
+    collect({ selectedOnly = false, includeLinks = true, includeTimestamps = false, includeActivity = false } = {}) {
+      const messages = this.snapshot({ includeLinks, includeTimestamps, includeActivity }).filter(item => !selectedOnly || item.selected);
       return { title: title(), provider: provider(), url: location.href, exportedAt: new Date().toISOString(), messages };
     }
   };

@@ -27,5 +27,14 @@ img { max-width: 100%; height: auto; }
   body { margin: 0; max-width: none; }
   .toolbar, #error { display: none; }
   article { border-color: #bbb; box-shadow: none; }
+  /* Firefox can still move a nested message box as a unit. In compact print
+     mode, let its heading and content participate directly in page flow. */
+  .compact-pagination article { display: contents; break-inside: auto; }
+  .compact-pagination .message { margin-bottom: 20px; }
+  .compact-pagination article > h2 { break-after: avoid; }
+  .compact-pagination .message p { orphans: 3; widows: 3; }
+  .compact-pagination .message pre,
+  .compact-pagination .message img,
+  .compact-pagination .message tr { break-inside: avoid; }
   a { color: inherit; text-decoration: none; }
 }
