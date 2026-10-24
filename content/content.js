@@ -3,11 +3,15 @@
   let observer;
   const messageCache = new Map();
   const messageOrder = [];
+  let cachedCharacters = 0;
+  let forwardAnchor = null;
   let activeExport = false;
   let exportStatus = null;
   let uiTimer;
   let collectingUrl = null;
+  let cancelRequested = false;
   function assertConversation() {
+    if (cancelRequested) throw new Error('Export stopped. No file was saved.');
     if (collectingUrl !== null && location.href !== collectingUrl) {
       throw new Error('The conversation changed during export. Open the intended chat and export again.');
     }
@@ -33,12 +37,32 @@
     return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
-  function remember(options = {}, earlier = false) {
+  async function prepareImages(options) {
+    const started = Date.now();
+    if (options.waitForImages) {
+      await window.ChatArchiveMedia?.waitForImages(() => {
+        assertConversation();
+        const extractor = window.ChatArchiveExtractor;
+        return extractor.nodes().map((node, index) => ({ node, owner: extractor.idOf(node, index) }))
+          .filter(({ node }) => !options.selectedOnly || node.dataset.chatArchiveSelected === 'true')
+          .map(({ node, owner }) => {
+            const root = extractor.contentRoot(node);
+            return { node: root, owner, excludedRoots: extractor.mediaExclusions(root) };
+          });
+      }, { onProgress: options.onImageProgress });
+    }
+    assertConversation();
+    return Date.now() - started;
+  }
+
+  async function remember(options = {}, earlier = false) {
+    const imageWait = await prepareImages(options);
     assertConversation();
     const batch = window.ChatArchiveExtractor.snapshot(options);
     // Merge visible windows by their shared messages. Disjoint windows loaded
     // while seeking the beginning precede the cache; forward windows follow it.
-    let cursor = earlier ? 0 : messageOrder.length;
+    if (earlier) forwardAnchor = null;
+    let cursor = earlier || !forwardAnchor ? 0 : messageOrder.indexOf(forwardAnchor) + 1;
     batch.forEach((item, index) => {
       const known = messageOrder.indexOf(item.id);
       if (known >= 0) cursor = known + 1;
@@ -49,12 +73,20 @@
         cursor = position + 1;
       }
       const previous = messageCache.get(item.id);
+      const nextCharacters = cachedCharacters + window.ChatArchiveExtractor.payloadSize(item) -
+        (previous ? window.ChatArchiveExtractor.payloadSize(previous) : 0);
+      if (nextCharacters > window.ChatArchiveExtractor.maxPayloadCharacters) {
+        throw new Error('This export exceeds the content memory limit. Export fewer selected messages. No partial file was saved.');
+      }
+      cachedCharacters = nextCharacters;
       // Virtualised nodes can temporarily lose their metadata. Retain a known
       // time only for the same exact message, never a different regenerated reply.
       if (options.includeTimestamps && !item.createdAt && previous?.createdAt && item.messageId &&
           item.messageId === previous.messageId && item.role === previous.role) item.createdAt = previous.createdAt;
       messageCache.set(item.id, previous?.selected && !item.selected ? { ...item, selected: true } : item);
     });
+    if (!earlier && batch.length) forwardAnchor = batch.at(-1).id;
+    return imageWait;
   }
 
   function scrollCandidates() {
@@ -150,8 +182,8 @@
 
   async function triggerEarlierBatch(host, options) {
     const previousSignature = visibleStartSignature();
-    const noChangeDeadline = Date.now() + 6500;
-    const finalDeadline = Date.now() + 14000;
+    let noChangeDeadline = Date.now() + 6500;
+    let finalDeadline = Date.now() + 14000;
     let changed = false;
     let stableSamples = 0;
     let previousState = '';
@@ -165,7 +197,9 @@
 
     while (Date.now() < finalDeadline) {
       await pause(250);
-      remember(options, true);
+      const imageWait = await remember(options, true);
+      noChangeDeadline += imageWait;
+      finalDeadline += imageWait;
       const signature = visibleStartSignature();
       if (signature && signature !== previousSignature) changed = true;
 
@@ -192,7 +226,7 @@
   async function loadConversationStart(host, options, onProgress) {
     let unchangedCycles = 0;
 
-    for (let pass = 0; pass < 300; pass++) {
+    for (let pass = 0; ; pass++) {
       const previousCount = messageCache.size;
       const changed = await triggerEarlierBatch(host, options);
       const added = messageCache.size - previousCount;
@@ -214,28 +248,38 @@
 
     host.scrollTop = 0;
     await pause(250);
-    remember(options, true);
+    await remember(options, true);
   }
 
   async function collectComplete(options = {}, onProgress = () => {}) {
     if (collectingUrl !== null) throw new Error('An export is already running.');
     collectingUrl = location.href;
+    messageCache.clear(); messageOrder.length = 0; cachedCharacters = 0; forwardAnchor = null;
+    window.ChatArchiveMedia?.beginExport();
     try {
-      const result = await collectCurrent(options, onProgress);
+      let progress = [1, 'Preparing export', 0, 0];
+      const update = (...args) => { progress = args; onProgress(...args); };
+      const result = await collectCurrent({ ...options, onImageProgress: (ready, total) =>
+        onProgress(progress[0], `Waiting for images: ${ready}/${total}`, progress[2], progress[3]) }, update);
       assertConversation();
       return result;
-    } finally { collectingUrl = null; }
+    } finally {
+      collectingUrl = null;
+      messageCache.clear(); messageOrder.length = 0; cachedCharacters = 0; forwardAnchor = null;
+      window.ChatArchiveMedia?.endExport();
+    }
   }
 
   async function collectCurrent(options = {}, onProgress = () => {}) {
     if (options.selectedOnly) {
+      await prepareImages(options);
       const selected = window.ChatArchiveExtractor.collect(options);
       onProgress(75, 'Collecting selected messages', selected.messages.length, selected.messages.length);
       return selected;
     }
 
     const host = scrollHost();
-    if (!host) return window.ChatArchiveExtractor.collect(options);
+    if (!host) { await prepareImages(options); return window.ChatArchiveExtractor.collect(options); }
     try {
       return await collectFromHost(host, options, onProgress);
     } finally { host.restore(); }
@@ -244,38 +288,49 @@
   async function collectFromHost(host, options, onProgress) {
     messageCache.clear();
     messageOrder.length = 0;
-    remember(options);
+    cachedCharacters = 0;
+    forwardAnchor = null;
+    await remember(options);
     let expected = cacheExpected();
     onProgress(2, 'Moving to the start', messageCache.size, expected);
 
     await loadConversationStart(host, options, onProgress);
+    await remember(options); // Anchor forward insertion before cached messages from the initial bottom window.
     expected = Math.max(expected, cacheExpected());
     onProgress(20, 'Collecting messages', messageCache.size, expected);
 
     let unchanged = 0;
-    let lastTop = -1;
+    let lastEndState = '';
     let reachedEnd = false;
     let stalled = 0;
-    for (let step = 0; step < 1200; step++) {
+    let progressDeadline = Date.now() + 60000;
+    for (;;) {
       const before = host.scrollTop;
       const beforeHeight = host.scrollHeight;
       const beforeCount = messageCache.size;
       const amount = Math.max(350, Math.floor(host.clientHeight * 0.72));
       host.scrollTop = Math.min(host.scrollTop + amount, host.scrollHeight);
       await pause(180);
-      remember(options);
+      progressDeadline += await remember(options);
       expected = Math.max(expected, cacheExpected());
       const maximum = Math.max(1, host.scrollHeight - host.clientHeight);
       onProgress(Math.min(96, 20 + Math.round((host.scrollTop / maximum) * 76)), 'Collecting conversation', messageCache.size, expected);
       const atEnd = host.scrollTop + host.clientHeight >= host.scrollHeight - 8;
-      unchanged = host.scrollTop === lastTop ? unchanged + 1 : 0;
-      lastTop = host.scrollTop;
-      if (atEnd && unchanged >= 2) {
+      const endState = `${Math.round(host.scrollHeight)}:${messageCache.size}:${messageOrder.at(-1)}`;
+      unchanged = atEnd && endState === lastEndState ? unchanged + 1 : 0;
+      lastEndState = atEnd ? endState : '';
+      if (atEnd && unchanged >= 8) {
         reachedEnd = true;
         break;
       }
       stalled = !atEnd && Math.abs(host.scrollTop - before) < 1 && host.scrollHeight === beforeHeight && messageCache.size === beforeCount ? stalled + 1 : 0;
       if (stalled >= 12) throw new Error('The conversation stopped scrolling before the end. Please retry or report this interface variant.');
+      // Length alone is not a failure: large chats can need thousands of steps.
+      // Renew the timeout only for new messages or forward movement in stable geometry.
+      if (messageCache.size > beforeCount || (host.scrollHeight === beforeHeight && host.scrollTop > before + 1)) {
+        progressDeadline = Date.now() + 60000;
+      }
+      if (Date.now() >= progressDeadline) break;
     }
 
     if (!reachedEnd) {
@@ -327,7 +382,10 @@
       const dismiss = document.createElement('button');
       dismiss.type = 'button'; dismiss.className = 'chat-archive-dismiss';
       dismiss.textContent = '×'; dismiss.setAttribute('aria-label', 'Dismiss export status');
-      dismiss.addEventListener('click', () => { view.remove(); syncAppearance(); });
+      dismiss.addEventListener('click', () => {
+        if (activeExport) { cancelRequested = true; dismiss.disabled = true; }
+        else { view.remove(); syncAppearance(); }
+      });
       row.append(title, elapsed, dismiss);
       const detail = document.createElement('div'); detail.className = 'chat-archive-progress-detail';
       const timeline = document.createElement('div');
@@ -340,7 +398,19 @@
     view.dataset.state = state;
     setText(view.querySelector('.chat-archive-progress-title'), label);
     setText(view.querySelector('.chat-archive-progress-detail'), state === 'error' ? 'Open Dialogue Export to try again.' : `${processed} messages collected${state === 'running' ? ' · keep this tab open' : exportStatus?.format === 'pdf' ? ' · save from the print page' : ' · check the save dialog or Downloads'}${state === 'done' && exportStatus?.timestampNotice ? ` · ${exportStatus.timestampNotice}` : ''}`);
-    view.querySelector('.chat-archive-dismiss').hidden = state === 'running';
+    const dismiss = view.querySelector('.chat-archive-dismiss');
+    dismiss.textContent = state === 'running' ? 'Stop' : '×';
+    dismiss.setAttribute('aria-label', state === 'running' ? 'Stop export' : 'Dismiss export status');
+    // Handoff cannot be cancelled after the browser has received the file.
+    dismiss.disabled = state === 'running' && (cancelRequested || percent >= 98);
+    view.querySelector('.chat-archive-image-diagnostic')?.remove();
+    if (state === 'error' && exportStatus?.mediaDiagnostic) {
+      const details = document.createElement('details'); details.className = 'chat-archive-image-diagnostic';
+      const summary = document.createElement('summary'); summary.textContent = 'Image diagnostic (no conversation text or URLs)';
+      const pre = document.createElement('pre'); pre.textContent = JSON.stringify(exportStatus.mediaDiagnostic, null, 2);
+      pre.style.cssText = 'max-height:160px;overflow:auto;white-space:pre-wrap;font-size:11px;user-select:text';
+      details.append(summary, pre); view.append(details);
+    }
     // These segments represent loading, collecting, and preparing the file.
     // The site does not tell us the total message count or time remaining.
     const stage = percent < 20 ? 0 : percent < 98 ? 1 : 2;
@@ -353,6 +423,7 @@
 
   async function runExport(job) {
     activeExport = true;
+    cancelRequested = false;
     setPicking(false);
     exportStatus = { state: 'running', label: 'Preparing export', format: job.format, processed: 0, startedAt: Date.now() };
     try {
@@ -362,7 +433,8 @@
         browser.runtime.sendMessage({ type: 'EXPORT_PROGRESS', percent, stage: percent < 20 ? 'LOAD' : percent < 98 ? 'READ' : 'SAVE' }).catch(() => {});
       };
       update(1, 'Preparing export');
-      const data = await collectComplete(job.options, update);
+      const data = await collectComplete({ ...job.options, outputFormat: job.format, waitForImages: job.format === 'html' || job.format === 'pdf' }, update);
+      assertConversation();
       if (data.url !== location.href) throw new Error('The conversation changed during export. Please retry.');
       if (!data.messages.length) throw new Error(job.options.selectedOnly ? 'No messages selected.' : 'No messages found.');
       if (job.options.includeTimestamps) {
@@ -377,11 +449,12 @@
       const completedJob = exportStatus;
       setTimeout(() => { if (exportStatus === completedJob && !activeExport) { view.remove(); syncAppearance(); } }, 15000);
     } catch (error) {
-      Object.assign(exportStatus, { state: 'error', label: error?.message || String(error), finishedAt: Date.now() });
+      Object.assign(exportStatus, { state: 'error', label: error?.message || String(error), mediaDiagnostic: error?.mediaDiagnostic || null, finishedAt: Date.now() });
       progressView(100, exportStatus.label, 'error', exportStatus.processed);
       browser.runtime.sendMessage({ type: 'EXPORT_FAILED' }).catch(() => {});
     } finally {
       activeExport = false;
+      cancelRequested = false;
     }
   }
 

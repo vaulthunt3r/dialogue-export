@@ -4,6 +4,27 @@ Dialogue Export is a Firefox extension for saving an open ChatGPT or Google Gemi
 
 Everything is processed locally in Firefox. The extension does not upload conversations, use analytics, or send telemetry.
 
+## 0.5.5 — images, code blocks and long-conversation fixes
+
+- Preserve loaded images, standalone generated-image replies, static SVG diagrams and canvas snapshots in HTML/PDF. Gallery images take their natural height without overlapping following text.
+- Preserve modern ChatGPT code blocks with language labels, indentation and supported syntax colors.
+- Improve collection across long and virtualized conversations. Broken decorative website icons no longer block text exports, including Google `faviconV2` icons.
+- Wait for content images, limit concurrent decoding and retained data, release export caches, and offer **Stop** during collection. Oversized exports stop with an explanation.
+
+The user confirmed successful export of a very long text conversation with the tested 0.5.5 runtime on October 24, 2026. This is not proof of completeness for every chat or interface.
+
+**Large or image-heavy chats remain a known limitation.** A previous test exported only part of an image-heavy conversation while reporting success, and a later test exhausted memory. The resource limits reduce extension allocations but do not cap Firefox or ChatGPT's total memory. That heavy conversation has not been revalidated. Check the beginning, middle and end of important exports; automatic multipart output is not included in 0.5.5.
+
+Download the **[Mozilla-signed 0.5.5 XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.5/Dialogue-Export-v0.5.5-signed.xpi)** for permanent installation. See [all release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.5), [release notes](docs/RELEASE-v0.5.5.md) and [validation details](docs/TEST-v0.5.5.md).
+
+### Wishlist
+
+- ZIP export containing the conversation and separate **original image files**, where the service makes them accessible to the user. Preview images must be clearly distinguished from originals.
+- Automatic numbered parts for large exports, with message order, image associations and completeness checks preserved.
+- Further testing and fixes for very long image-heavy chats, including incomplete exports and memory use.
+
+These are future work, **not features of 0.5.5**. See the [wishlist and proposed behavior](docs/WISHLIST.md); no delivery date is promised.
+
 ## 0.5.4 — compact printing and optional activity sections
 
 - **Compact PDF pagination** lets messages continue across pages without message boxes in print. It applies to PDF and printing exported HTML; screen HTML keeps its appearance.
@@ -115,7 +136,7 @@ A permanent installation requires a version signed by Mozilla. If the newest rel
 
 ### Temporary installation from source
 
-1. Extract `Dialogue-Export-v0.5.2.zip` (or the source archive).
+1. Extract the current `Dialogue-Export-v0.5.5.zip` (or the source archive).
 2. Open `about:debugging#/runtime/this-firefox` in Firefox.
 3. Select **Load Temporary Add-on**.
 4. Choose `manifest.json` from the extracted folder.
@@ -146,6 +167,8 @@ For PDF, Dialogue Export opens a printable page. Select **Save as PDF**, then ch
 - **PDF** creates a print-friendly document through Firefox.
 
 Dialogue Export is designed primarily for ordinary text conversations. Complex interactive canvases, generated applications, and some embedded media may not be reproduced exactly.
+
+Embedded images preserve the resolution loaded by the page, which may be a preview rather than the original Download file. Unreadable remote images can remain explicitly labelled external references and may need a valid session. Reloading a PDF preparation tab requires a new export; an already-open prepared page remains usable for printing.
 
 ## Privacy
 

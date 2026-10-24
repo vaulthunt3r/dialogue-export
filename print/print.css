@@ -20,6 +20,15 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #
 .chat-archive-text-block, .chat-archive-embedded-block { margin: 14px 0; padding: 14px; border: 1px solid #cfd6e5; border-radius: 8px; background: #f8f9fc; }
 pre { overflow: auto; padding: 14px; background: #17191e; color: #f2f3f5; border-radius: 8px; white-space: pre-wrap; }
 code { font-family: ui-monospace, monospace; }
+.chat-archive-code { margin: 16px 0; border: 1px solid #cfd4dc; border-radius: 8px; background: #17191e; color: #f2f3f5; }
+.chat-archive-code-label { padding: 8px 14px; border-bottom: 1px solid #596273; font: 600 12px system-ui, sans-serif; }
+.chat-archive-code pre { margin: 0; border-radius: 0 0 8px 8px; font-size: 13px; line-height: 1.5; tab-size: 4; overflow-wrap: anywhere; }
+.export-code-keyword { color: #c4a7ff; } .export-code-string { color: #a6df9a; } .export-code-literal { color: #ffca85; } .export-code-comment { color: #a4aebc; }
+@media print {
+  .chat-archive-code, .chat-archive-code pre { color: #1d2026; background: #f6f8fa; }
+  .chat-archive-code .export-code-keyword { color: #6b21a8; } .chat-archive-code .export-code-string { color: #166534; }
+  .chat-archive-code .export-code-literal { color: #9a3412; } .chat-archive-code .export-code-comment { color: #4b5563; }
+}
 table { border-collapse: collapse; width: 100%; }
 th, td { border: 1px solid #cfd4dc; padding: 7px; text-align: left; }
 img { max-width: 100%; height: auto; }
@@ -36,5 +45,7 @@ img { max-width: 100%; height: auto; }
   .compact-pagination .message pre,
   .compact-pagination .message img,
   .compact-pagination .message tr { break-inside: avoid; }
+  .compact-pagination .chat-archive-code-label { break-after: avoid; }
+  .compact-pagination .chat-archive-code pre { break-inside: auto; overflow: visible; orphans: 3; widows: 3; }
   a { color: inherit; text-decoration: none; }
 }

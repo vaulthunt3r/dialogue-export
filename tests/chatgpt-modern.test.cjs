@@ -127,6 +127,44 @@ test('missing modern stable keys fail explicitly instead of reusing viewport pos
   finally { f.close(); }
 });
 
+test('modern bubbles can use explicit message IDs and bounded legacy turn identifiers', () => {
+  for (const attribute of ['data-message-id="q"', 'data-content-search-unit-key="q"', 'data-testid="conversation-turn-42"']) {
+    const f = fixture(`<article ${attribute}><div data-user-message-bubble>Q</div></article>`);
+    try {
+      const first = f.extractor.snapshot()[0].id;
+      f.w.document.querySelector('main').innerHTML = `<article ${attribute}><div data-user-message-bubble>Edited Q</div></article>`;
+      assert.equal(f.extractor.snapshot()[0].id, first);
+    } finally { f.close(); }
+  }
+});
+
+test('an ancestor identifier shared by two messages cannot silently merge them', () => {
+  const f = fixture('<div data-turn-key="shared"><div data-user-message-bubble>Q1</div><div data-user-message-bubble>Q2</div></div>');
+  try { assert.throws(() => f.extractor.snapshot(), /identifier.*shared|ambiguous/i); }
+  finally { f.close(); }
+});
+
+test('a conversation requiring over 1200 forward steps completes while making progress', async () => {
+  const f = fixture(user('q')), host = f.w.document.querySelector('main');
+  const steps = 1210, increment = 432, maximum = steps * increment;
+  let top = maximum;
+  host.style.overflowY = 'auto';
+  Object.defineProperty(f.w.document, 'scrollingElement', { value: host });
+  Object.defineProperties(host, { clientHeight: { value: 600 }, scrollHeight: { value: maximum + 600 },
+    scrollTop: { get: () => top, set: value => { top = Math.max(0, Math.min(maximum, value)); } } });
+  // Cheap synthetic windows exercise the collector's length limit, not HTML rendering.
+  f.extractor.snapshot = () => [Math.floor(top / increment)].map(i => ({ id: `m${i}`, role: 'user', text: `Message ${i}`, html: `Message ${i}` }));
+  try {
+    let result, error;
+    const collected = f.send({ type: 'COLLECT', options: {} }).then(data => { result = data; }, reason => { error = reason; });
+    await f.clock.tickAsync(260000);
+    await collected;
+    assert.ifError(error);
+    assert.deepEqual(copy(result.messages).map(m => m.id), Array.from({ length: steps + 1 }, (_, i) => `m${i}`));
+    assert.equal(top, maximum);
+  } finally { f.close(); }
+});
+
 test('opaque search keys are not parsed and turn-key fallback separates authors', () => {
   const f = fixture('<div data-turn-key="opaque-turn"><div data-user-message-bubble>Q</div><div data-chatgpt-selection-message-id="">A</div></div>');
   try {

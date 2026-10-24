@@ -160,7 +160,7 @@ for (const compactPagination of [false,true]) test(`PDF handoff preserves docume
   w.ChatArchiveRenderers={html:()=>'<html><head><title>Original title</title></head><body><main><article>Readable dialogue</article></main></body></html>'};
   w.browser={runtime:{onMessage:{addListener:fn=>handler=fn},getURL:p=>`https://extension.invalid/${p}`},downloads:{onChanged:{addListener:()=>{}}},action:{setBadgeText:async()=>{},setBadgeBackgroundColor:async()=>{}},tabs:{create:async({url})=>{created=url;}}};
   w.eval(read('background.js'));
-  assert.equal((await handler({type:'EXPORT_READY',job:{...job,options:{...job.options,compactPagination},format:'pdf',filename:'my-notes-2026-09-10.pdf'},data:{}})).ok,true);
+  assert.equal((await handler({type:'EXPORT_READY',job:{...job,options:{...job.options,compactPagination},format:'pdf',filename:'my-notes-2026-09-10.pdf'},data:{messages:[]}})).ok,true);
   const id=new URL(created).searchParams.get('id');const result=await handler({type:'GET_PRINT_PAGE',id});
   assert.equal(result.filename,'my-notes-2026-09-10.pdf');
   assert.equal(result.compactPagination,compactPagination);
@@ -194,6 +194,22 @@ test('compact pagination defaults off, persists, and is sent only for HTML/PDF',
     q.$('exportButton').click(); await q.clock.tickAsync(10);
     assert.equal(q.model.calls.find(r=>r.type==='BEGIN_EXPORT').job.options.compactPagination,['pdf','html'].includes(format));
     q.close();
+  }
+});
+
+test('PDF waits for image decoding before enabling print and reports failed images',async()=>{
+  for (const fails of [false, true]) {
+    const e=environment(read('print/print.html'),'https://fixture.invalid/print.html?id=media');
+    let finish;
+    e.w.HTMLImageElement.prototype.decode=()=>new Promise((resolve,reject)=>{finish=()=>fails?reject(Error('Unavailable')):resolve();});
+    e.w.browser={runtime:{sendMessage:async()=>({ok:true,content:'<main><img src="https://fixture.invalid/image.png"></main>'})}};
+    e.w.eval(read('print/print.js'));
+    await e.clock.tickAsync(1);
+    assert.equal(e.w.document.querySelector('#printButton').disabled,true);
+    finish();await e.clock.tickAsync(1);
+    assert.equal(e.w.document.querySelector('#printButton').disabled,false);
+    assert.equal(e.w.document.querySelector('#error').textContent.includes('could not be loaded'),fails);
+    e.close();
   }
 });
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.5 — 2026-10-24
+
+- Preserve loaded images, standalone generated-image replies, static SVG diagrams and readable canvas snapshots in HTML/PDF. Normalize fixed-height galleries so images do not overlap the next message.
+- Preserve loaded modern ChatGPT code blocks with language labels, indentation, blank lines and supported syntax colors; mark unavailable virtualized lines.
+- Accept additional existing message identifiers, improve ordering across virtualized windows, and remove fixed 300-batch/1200-step collection ceilings. Ambiguous identity and stalled scrolling remain explicit errors.
+- Wait for content images before capture, while consistently excluding decorative icons and activity media absent from the output. Fix blocked Google faviconV2 requests interrupting text exports. The user confirmed successful export of a very long text conversation with the tested runtime on October 24.
+- Bound collected media and serialized content, limit pending source decodes, avoid unused output copies, release caches and scratch canvases, and offer Stop during collection. These safeguards do not guarantee a fixed total Firefox memory footprint.
+- Release completed/failed download Blob URLs and consume background print payloads once. Reloading a prepared PDF tab requires a new export.
+- Capture structural image diagnostics at failure time before scroll restoration. Reports exclude text, URLs, IDs, cookies and pixels; opt-in diagnostic scripts remain local.
+- Known limitation: a previously incomplete, image-heavy long conversation has not been revalidated after an OOM report. Check important exports against the source. Automatic multipart output is not included. Successful long-text testing does not establish completeness for all heavy chats or interface variants.
+- Validation: automated regressions, isolated Firefox HTML/PDF media checks and user-confirmed long-text export. No additional permissions, remote code, telemetry or conversation uploads. See docs/TEST-v0.5.5.md for evidence and limits.
+- Distribute the Mozilla-returned signed XPI, runtime ZIP, complete development source ZIP, release kit and SHA-256 checksums. The signed package matches the submitted runtime apart from manifest formatting and added signature metadata.
+- Document a wishlist for ZIP archives with separately stored original images where available, automatic numbered parts and further image-heavy collection work. These are not implemented in 0.5.5.
+
 ## 0.5.4 — 2026-10-11
 
 - Add opt-in export of available ChatGPT Working / Thinking sections in all formats (issue #4). HTML uses collapsible details; PDF prints expanded details; TXT/Markdown use headings; JSON includes activity fields. Expand sections before exporting. Collapsed sections get an explicit unavailable-content notice; vanished content is not recovered. Ambiguous associations stop export rather than attaching activity to a nearby answer.
