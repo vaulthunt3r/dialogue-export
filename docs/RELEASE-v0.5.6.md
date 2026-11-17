@@ -2,7 +2,7 @@
 
 November 17, 2026. Mozilla-signed Firefox release.
 
-[Install the signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-v0.5.6-signed.xpi) · [All downloads](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.6) · [60-second feature tour](media/Dialogue-Export-0.5.6-trailer-EN.mp4)
+[Install the signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-v0.5.6-signed.xpi) · [All downloads](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.6) · [60-second feature tour](https://github.com/user-attachments/assets/c4a84b92-d3b3-4237-879a-082efc998ac2)
 
 ## Changes
 

@@ -8,9 +8,9 @@ A Firefox extension for exporting a conversation to **TXT, Markdown, HTML, JSON 
 
 ## See it in a minute
 
-[![Watch the Dialogue Export feature tour: formats, images, numbered parts and ZIP archives](docs/media/Dialogue-Export-poster.png)](docs/media/Dialogue-Export-0.5.6-trailer-EN.mp4)
+https://github.com/user-attachments/assets/c4a84b92-d3b3-4237-879a-082efc998ac2
 
-**[Watch the 60-second tour](docs/media/Dialogue-Export-0.5.6-trailer-EN.mp4)** · [Download MP4](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-0.5.6-trailer-EN.mp4)
+**[Watch the 60-second tour](https://github.com/user-attachments/assets/c4a84b92-d3b3-4237-879a-082efc998ac2)** · [Download MP4](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-0.5.6-trailer-EN.mp4)
 
 English titles and original music. The tour uses fictional conversations and demonstration data.
 

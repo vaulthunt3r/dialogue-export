@@ -2,7 +2,7 @@
 
 English promotional feature tour, created November 17, 2026. Duration 60 seconds; 1920×1080, 30 fps; H.264/yuv420p with AAC stereo and fast-start MP4. Original instrumental score, no narrator. Monochrome typography and ASCII controls follow the product's interface.
 
-[Watch the published video](../../docs/media/Dialogue-Export-0.5.6-trailer-EN.mp4) is available from the repository's `docs/media` directory and the 0.5.6 release. Generated `output/` files and temporary capture profiles are excluded from source control; the commands below recreate them.
+[Watch the published video](https://github.com/user-attachments/assets/c4a84b92-d3b3-4237-879a-082efc998ac2). A downloadable copy is available in the repository's `docs/media` directory and the 0.5.6 release. Generated `output/` files and temporary capture profiles are excluded from source control; the commands below recreate them.
 
 ## Deliverables
 
