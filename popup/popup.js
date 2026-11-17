@@ -17,6 +17,28 @@ let pollTimer;
 let storageQueue = Promise.resolve();
 let initialized = false;
 let sequence = 0;
+let notificationPermission = false;
+let siteOrigin = null, siteAccessBusy = false;
+const inPanel = new URLSearchParams(location.search).get('panel') === '1';
+if (inPanel) { document.body.dataset.panel = 'true'; $('collapsePanel').hidden = false; }
+function closeMenu() {
+  if (inPanel) return send({ type: 'PANEL_COLLAPSE' }).catch(() => {});
+  window.close();
+}
+$('collapsePanel').addEventListener('click', closeMenu);
+$('enableSiteAccess').addEventListener('click', async () => {
+  if (inPanel || !siteOrigin || siteAccessBusy) return;
+  const origin = siteOrigin;
+  siteAccessBusy = true; $('enableSiteAccess').disabled = true;
+  try {
+    // Call directly from the click: Firefox requires an explicit user gesture.
+    const granted = await browser.permissions.request({ origins: [origin] });
+    text('siteAccessStatus', granted ? 'Automatic site access enabled. Reload this chat to check the icon.' : 'Automatic access was not enabled. You can still start from the toolbar.');
+    $('enableSiteAccess').hidden = granted;
+  } catch (_) {
+    text('siteAccessStatus', 'Could not enable access. Right-click the Firefox toolbar icon to manage site permissions.');
+  } finally { siteAccessBusy = false; $('enableSiteAccess').disabled = false; }
+});
 
 function withTimeout(promise, ms, message) {
   let timer;
@@ -24,7 +46,7 @@ function withTimeout(promise, ms, message) {
 }
 function send(message) {
   if (tabId == null) return Promise.reject(new Error('No active tab was found.'));
-  return withTimeout(browser.tabs.sendMessage(tabId, message), 3000, 'The conversation did not respond. Refresh the page, then try again.');
+  return withTimeout(inPanel ? browser.runtime.sendMessage({ type: 'PANEL_SEND', message }) : browser.tabs.sendMessage(tabId, message), 3000, 'The conversation did not respond. Refresh the page, then try again.');
 }
 function text(id, value) { if ($(id).textContent !== value) $(id).textContent = value; }
 function error(message = '', retry = false) {
@@ -53,7 +75,9 @@ function filename() {
   return `${safeName($('filename').value)}${$('appendDate').checked ? `-${date}` : ''}.${format}`;
 }
 function preferences() {
-  return { scope, format, includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, includeActivity: $('includeActivity').checked, includeTimestamps: $('includeTimestamps').checked, appendDate: $('appendDate').checked, compactPagination: $('compactPagination').checked };
+  return { scope, format, includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, includeActivity: $('includeActivity').checked, includeTimestamps: $('includeTimestamps').checked, appendDate: $('appendDate').checked, compactPagination: $('compactPagination').checked,
+    includeUserImages: $('includeUserImages').checked, includeAssistantImages: $('includeAssistantImages').checked, includeImageDetails: $('includeImageDetails').checked,
+    notifyOnCompletion: $('notifyOnCompletion').checked };
 }
 function savePreferences() {
   const saved = preferences();
@@ -65,18 +89,27 @@ function elapsed(job) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 function render() {
+  $('archiveChats').hidden = info?.provider !== 'ChatGPT';
+  $('archiveChats').disabled = state === 'connecting' || busy || info?.activeExport;
   const running = info?.activeExport === true;
+  $('stopExport').hidden = !running;
+  $('stopExport').disabled = info?.exportStatus?.cancellable === false;
   const ready = state === 'ready';
   const selected = scope === 'selected';
   $('compactPaginationOption').hidden = !['html', 'pdf'].includes(format);
+  $('imageOptions').hidden = !['html', 'pdf'].includes(format);
+  $('includeImageDetails').disabled = !$('includeUserImages').checked && !$('includeAssistantImages').checked;
   document.body.dataset.state = ready && !running ? 'ready' : state;
-  $('controls').disabled = !ready || busy || running;
+  // The ZIP chooser remains available on an empty ChatGPT chat too.
+  const emptyChat = state === 'disconnected' && info?.provider === 'ChatGPT' && info.count === 0;
+  $('controls').disabled = (!ready && !emptyChat) || busy || running;
   $('includeTimestamps').disabled = info?.provider !== 'ChatGPT';
   $('includeActivity').disabled = info?.provider !== 'ChatGPT';
   text('timestampsHint', info?.provider === 'Gemini' ? 'Message timestamps are currently supported for ChatGPT only.' : 'Local date and time for each message, when available.');
   document.querySelectorAll('[name="scope"]').forEach(input => { input.checked = input.value === scope; });
   document.querySelectorAll('[name="format"]').forEach(input => { input.checked = input.value === format; });
   $('selectionTools').hidden = !selected;
+  $('scopeHint').dataset.selected = String(selected);
   $('clearSelection').disabled = !info?.selected;
   text('selectionMode', info?.picking ? 'Continue choosing' : info?.selected ? 'Change selection' : 'Choose messages');
   text('scopeHint', selected ? info?.selected ? `${info.selected} selected · only these messages will be exported.` : 'Choose at least one message on the page.' : 'Earlier messages are loaded automatically.');
@@ -88,7 +121,7 @@ function render() {
   $('exportButton').disabled = !ready || busy || running || (selected && !info?.selected);
   text('exportLabel', state === 'connecting' ? 'Connecting…' : !ready ? 'Conversation unavailable' : busy ? 'Starting export…' : running ? 'Export in progress…' : format === 'pdf' ? 'Prepare PDF' : `Export ${format.toUpperCase()}`);
   text('actionHint', running ? 'You can close this popup. Keep the conversation tab open.' : selected && !info?.selected ? 'Use “Choose messages” to select messages on the page.' : format === 'pdf' ? 'Save the PDF from Firefox’s print dialog.' : 'Firefox will ask where to save your file.');
-  if (ready) text('status', `${info.provider || 'Conversation'} · ${running ? 'exporting' : 'ready to export'}`);
+  if (ready) text('status', `${info.provider || 'Conversation'} / ${running ? 'exporting' : 'ready'}`);
   const job = info?.exportStatus;
   $('activity').hidden = !job;
   if (job) {
@@ -107,11 +140,16 @@ async function connect() {
   clearTimeout(pollTimer);
   const attempt = ++sequence;
   state = 'connecting'; busy = false; info = null;
+  siteOrigin = null; $('siteAccess').hidden = true;
   error(); text('status', 'Connecting to your conversation…'); render();
   try {
     const [tabs, saved] = await Promise.all([
-      withTimeout(browser.tabs.query({ active: true, currentWindow: true }), 3000, 'Firefox did not return the active tab.'),
-      initialized ? Promise.resolve(null) : withTimeout(browser.storage.local.get(['scope', 'format', 'includeTitle', 'includeLinks', 'includeTimestamps', 'includeActivity', 'appendDate', 'compactPagination']), 2500, 'Preferences unavailable').catch(() => ({}))
+      withTimeout(inPanel ? browser.runtime.sendMessage({ type: 'PANEL_CONTEXT' }).then(result => {
+        if (!result?.ok) throw new Error('Open the export menu from the conversation tab.');
+        notificationPermission = result.notifications === true;
+        return [{ id: result.tabId }];
+      }) : browser.tabs.query({ active: true, currentWindow: true }), 3000, 'Firefox did not return the active tab.'),
+      initialized ? Promise.resolve(null) : withTimeout(browser.storage.local.get(['scope', 'format', 'includeTitle', 'includeLinks', 'includeTimestamps', 'includeActivity', 'appendDate', 'compactPagination', 'includeUserImages', 'includeAssistantImages', 'includeImageDetails', 'notifyOnCompletion']), 2500, 'Preferences unavailable').catch(() => ({}))
     ]);
     if (attempt !== sequence) return;
     const tab = tabs[0];
@@ -125,10 +163,25 @@ async function connect() {
       $('appendDate').checked = saved.appendDate === true;
       $('compactPagination').checked = saved.compactPagination === true;
       $('includeActivity').checked = saved.includeActivity === true;
+      $('includeUserImages').checked = saved.includeUserImages !== false;
+      $('includeAssistantImages').checked = saved.includeAssistantImages !== false;
+      $('includeImageDetails').checked = saved.includeImageDetails === true;
+      if (!inPanel) notificationPermission = !!(await browser.permissions?.contains({ permissions: ['notifications'] }).catch(() => false));
+      $('notifyOnCompletion').checked = saved.notifyOnCompletion === true && notificationPermission;
       initialized = true;
     }
     if (tab?.url && !/^https:\/\/(chatgpt\.com|gemini\.google\.com)(\/|$)/i.test(tab.url)) {
       throw new Error('Open a conversation on ChatGPT or Gemini, then open Dialogue Export.');
+    }
+    if (!inPanel && tab?.url && browser.permissions?.contains) {
+      const origin = new URL(tab.url).origin + '/*';
+      const granted = await withTimeout(browser.permissions.contains({ origins: [origin] }), 2000, 'Site access unavailable').catch(() => null);
+      if (attempt !== sequence) return;
+      if (granted === false) {
+        siteOrigin = origin;
+        text('siteAccessStatus', `Automatic access to ${new URL(tab.url).hostname} is off. The page icon may appear only after a toolbar click.`);
+        $('enableSiteAccess').hidden = false; $('siteAccess').hidden = false;
+      }
     }
     let next;
     for (let retry = 0; retry < 2; retry++) {
@@ -136,8 +189,8 @@ async function connect() {
       catch (e) { if (retry === 1) throw e; await new Promise(resolve => setTimeout(resolve, 350)); }
     }
     if (attempt !== sequence) return;
-    if (!next.count && !next.activeExport) throw new Error('No messages found yet. Open a conversation, wait for its messages to appear, then try again.');
     acceptInfo(next);
+    if (!next.count && !next.activeExport) throw new Error('No messages found yet. Open a conversation, wait for its messages to appear, then try again.');
     if (!$('filename').value) $('filename').value = safeName(next.title);
     state = 'ready'; render(); schedulePoll();
   } catch (e) {
@@ -185,8 +238,36 @@ async function chooseScope(next) {
 }
 document.querySelectorAll('[name="scope"]').forEach(input => input.addEventListener('change', () => chooseScope(input.value)));
 document.querySelectorAll('[name="format"]').forEach(input => input.addEventListener('change', () => { format = input.value; error(); savePreferences(); render(); }));
-['includeTitle', 'includeLinks', 'includeTimestamps', 'includeActivity', 'appendDate', 'compactPagination'].forEach(id => $(id).addEventListener('change', () => { savePreferences(); render(); }));
+['includeTitle', 'includeLinks', 'includeTimestamps', 'includeActivity', 'appendDate', 'compactPagination', 'includeUserImages', 'includeAssistantImages', 'includeImageDetails'].forEach(id => $(id).addEventListener('change', () => { savePreferences(); render(); }));
+$('notifyOnCompletion').addEventListener('change', async () => {
+  error();
+  if ($('notifyOnCompletion').checked) {
+    if (inPanel) {
+      if (!notificationPermission) {
+        $('notifyOnCompletion').checked = false;
+        try { await browser.runtime.sendMessage({ type: 'PANEL_NOTIFICATION_SETTINGS' }); }
+        catch (_) { error('Open the Firefox toolbar menu to enable notifications.'); }
+      }
+      savePreferences(); render(); return;
+    }
+    busy = true; render();
+    try {
+      // Request directly in this user gesture, before awaiting any other work.
+      $('notifyOnCompletion').checked = await browser.permissions.request({ permissions: ['notifications'] });
+      if (!$('notifyOnCompletion').checked) error('Notifications remain off. Export results will still stay visible in the conversation tab.');
+    } catch (_) {
+      $('notifyOnCompletion').checked = false;
+      error('Firefox could not enable notifications. Export results will still stay visible in the conversation tab.');
+    } finally { busy = false; }
+  }
+  savePreferences(); render();
+});
 $('filename').addEventListener('input', render);
+$('stopExport').addEventListener('click', async () => {
+  $('stopExport').disabled = true;
+  try { await send({ type: 'STOP_EXPORT' }); }
+  catch (e) { error(e.message); }
+});
 $('retry').addEventListener('click', connect);
 $('selectionMode').addEventListener('click', async () => {
   if (busy || state !== 'ready' || info?.activeExport) return;
@@ -194,7 +275,7 @@ $('selectionMode').addEventListener('click', async () => {
   try {
     const result = await send({ type: 'SET_PICKING', enabled: true });
     if (!result?.ok) throw new Error(result?.error || 'Could not start message selection.');
-    info.picking = true; scope = 'selected'; savePreferences(); window.close();
+    info.picking = true; scope = 'selected'; savePreferences(); closeMenu();
   } catch (e) { error(e.message); }
   finally { busy = false; render(); }
 });
@@ -212,10 +293,14 @@ $('exportForm').addEventListener('submit', async event => {
   savePreferences();
   const previousJob = info?.exportStatus?.startedAt;
   try {
-    const result = await send({ type: 'BEGIN_EXPORT', job: { format, filename: filename(), options: { selectedOnly: scope === 'selected', includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, includeActivity: $('includeActivity').checked && info.provider === 'ChatGPT', includeTimestamps: $('includeTimestamps').checked && info.provider === 'ChatGPT', compactPagination: ['html', 'pdf'].includes(format) && $('compactPagination').checked } } });
+    const result = await send({ type: 'BEGIN_EXPORT', job: { format, filename: filename(), options: { selectedOnly: scope === 'selected', includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, includeActivity: $('includeActivity').checked && info.provider === 'ChatGPT', includeTimestamps: $('includeTimestamps').checked && info.provider === 'ChatGPT', compactPagination: ['html', 'pdf'].includes(format) && $('compactPagination').checked,
+      includeUserImages: !['html', 'pdf'].includes(format) || $('includeUserImages').checked, includeAssistantImages: !['html', 'pdf'].includes(format) || $('includeAssistantImages').checked,
+      includeImageDetails: ['html', 'pdf'].includes(format) && $('includeImageDetails').checked,
+      notifyOnCompletion: $('notifyOnCompletion').checked } } });
     if (!result?.ok) throw new Error(result?.error || 'The export could not start.');
     info.activeExport = true;
     info.exportStatus = result.exportStatus || { state: 'running', label: 'Preparing export', startedAt: Date.now(), processed: 0, format };
+    if (inPanel) closeMenu();
   } catch (e) {
     // A delayed acknowledgement must not cause a second export.
     try {
@@ -228,5 +313,32 @@ $('exportForm').addEventListener('submit', async event => {
   } finally { busy = false; render(); if (state === 'ready') schedulePoll(); }
 });
 text('version', `v${browser.runtime.getManifest().version}`);
+$('archiveChats').addEventListener('click', async () => {
+  try {
+    const result = await browser.runtime.sendMessage({ type: 'ARCHIVE_OPEN', tabId });
+    if (!result?.ok) throw Error(result?.error || 'Could not open the chat archive.');
+    closeMenu();
+  } catch (e) { error(e.message); }
+});
 window.addEventListener('pagehide', () => { ++sequence; clearTimeout(pollTimer); });
+if (inPanel && typeof ResizeObserver !== 'undefined') {
+  let previousHeight = 0;
+  const resize = new ResizeObserver(() => {
+    // Measure natural settings height independently of this iframe's current viewport.
+    const chrome = [...document.querySelectorAll('body>header, body>footer, .export-actions')]
+      .reduce((sum, node) => { const style = getComputedStyle(node); return sum + node.getBoundingClientRect().height + parseFloat(style.marginTop) + parseFloat(style.marginBottom); }, 20);
+    const height = Math.min(440, Math.ceil(chrome + $('settingsContents').getBoundingClientRect().height));
+    if (height === previousHeight) return;
+    previousHeight = height;
+    browser.runtime.sendMessage({ type: 'PANEL_SIZE', height }).catch(() => {});
+  });
+  ['settingsContents','errorBox','archiveChats'].forEach(id => resize.observe($(id)));
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(); });
+}
+if (inPanel) browser.storage.onChanged?.addListener(async (changes, area) => {
+  if (area !== 'local' || !changes.notifyOnCompletion) return;
+  const result = await browser.runtime.sendMessage({ type: 'PANEL_CONTEXT' }).catch(() => null);
+  notificationPermission = result?.notifications === true;
+  $('notifyOnCompletion').checked = changes.notifyOnCompletion.newValue === true && notificationPermission;
+});
 connect();

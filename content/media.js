@@ -16,8 +16,17 @@
     const next = { pixels: Math.max(old.pixels, pixels), characters: Math.max(old.characters, characters) };
     const nextPixels = resources.pixels - old.pixels + next.pixels;
     const nextCharacters = resources.characters - old.characters + next.characters;
-    if (nextPixels > limits.pixels || nextCharacters > limits.imageCharacters || (!resources.entries.has(key) && resources.entries.size >= limits.assets)) {
-      throw new Error('This export exceeds the image memory limit. Export fewer selected messages. No partial file was saved.');
+    const nextAssets = resources.entries.size + (resources.entries.has(key) ? 0 : 1);
+    const exceeded = nextPixels > limits.pixels ? 'pixels' : nextCharacters > limits.imageCharacters ? 'imageCharacters' : nextAssets > limits.assets ? 'assets' : null;
+    if (exceeded) {
+      const attempted = { assets: nextAssets, pixels: nextPixels, imageCharacters: nextCharacters };
+      const amount = exceeded === 'pixels' ? `${(nextPixels / 1000000).toFixed(1)} / ${(limits.pixels / 1000000).toFixed(1)} megapixels`
+        : exceeded === 'imageCharacters' ? `${(nextCharacters / (1024 * 1024)).toFixed(1)} / 16 Mi characters of embedded image data`
+        : `${nextAssets} / ${limits.assets} images`;
+      const error = new Error(`This export exceeds the image memory limit (${amount}). Export fewer selected messages. No partial file was saved.`);
+      error.mediaDiagnostic = { version: 2, phase: 'budget', exceeded, attempted, limits,
+        retained: { assets: resources.entries.size, pixels: resources.pixels, imageCharacters: resources.characters } };
+      throw error;
     }
     resources.entries.set(key, next); resources.pixels = nextPixels; resources.characters = nextCharacters;
   }
@@ -234,7 +243,7 @@
     resourceUsage: () => resources ? { assets: resources.entries.size, pixels: resources.pixels, imageCharacters: resources.characters } : { assets: 0, pixels: 0, imageCharacters: 0 },
     normalizeGalleries,
     waitForImages,
-    preserve(source, clone, { owner = 'unscoped', excludedRoots = [] } = {}) {
+    preserve(source, clone, { owner = 'unscoped', excludedRoots = [], includeImageDetails = false, role = 'assistant', provider = 'Assistant' } = {}) {
       const originals = [...source.querySelectorAll('img,svg,canvas')];
       const copies = [...clone.querySelectorAll('img,svg,canvas')];
       const indexes = { img: 0, svg: 0, canvas: 0 };
@@ -278,6 +287,14 @@
           figure.append(image);
           if (external) notice = 'Image is linked, not embedded; it may require the original site and a valid session.';
         } else notice = 'Visual content could not be embedded. Open the original conversation to view it.';
+        if (includeImageDetails && (data || external)) {
+          const detail = document.createElement('figcaption');
+          const width = element.naturalWidth || Number(element.getAttribute('width')) || 0;
+          const height = element.naturalHeight || Number(element.getAttribute('height')) || 0;
+          const encoding = external ? 'linked image' : svg ? 'sanitized SVG' : raster.test(element.currentSrc || element.getAttribute('src') || '') ? 'embedded source data' : 'page snapshot (PNG)';
+          detail.textContent = `${role === 'user' ? 'User image' : `Image from ${provider} response`}${width && height ? ` · ${width} × ${height} px` : ''} · ${encoding} · original file not verified`;
+          figure.append(detail);
+        }
         if (notice) {
           const caption = document.createElement('figcaption');
           caption.textContent = `${label}: ${notice}`;

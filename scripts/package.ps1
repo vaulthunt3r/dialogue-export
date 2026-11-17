@@ -12,7 +12,7 @@ if ($SignedXpi -and -not (Test-Path -LiteralPath $SignedXpi -PathType Leaf)) { t
 if (Test-Path -LiteralPath $outputRoot) { throw "Output already exists: $outputRoot. Preserve it before building again." }
 $runtimeRoot = Join-Path $outputRoot 'runtime'
 [IO.Directory]::CreateDirectory($runtimeRoot) | Out-Null
-$runtimeItems = @('manifest.json', 'background.js', 'content', 'popup', 'print', 'shared', 'icons', 'LICENSE', 'PRIVACY.md', 'THIRD_PARTY_NOTICES.md')
+$runtimeItems = @('manifest.json', 'background.js', 'content', 'popup', 'print', 'archive', 'shared', 'icons', 'LICENSE', 'PRIVACY.md', 'THIRD_PARTY_NOTICES.md')
 foreach ($item in $runtimeItems) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $item) -Destination $runtimeRoot -Recurse
 }
@@ -43,7 +43,7 @@ $runtimeZip = Join-Path $outputRoot "$prefix.zip"
 New-PackageZip $runtimeRoot $runtimeItems $runtimeZip
 if ($SignedXpi) { Copy-Item -LiteralPath $SignedXpi -Destination (Join-Path $outputRoot "$prefix-signed.xpi") }
 else { Copy-Item -LiteralPath $runtimeZip -Destination (Join-Path $outputRoot "$prefix-unsigned.xpi") }
-$sourceItems = $runtimeItems + @('README.md', 'CHANGELOG.md', 'SECURITY.md', 'package.json', '.gitignore', 'docs', 'tests', 'scripts')
+$sourceItems = $runtimeItems + @('README.md', 'CHANGELOG.md', 'SECURITY.md', 'package.json', 'package-lock.json', '.gitignore', 'docs', 'tests', 'scripts', 'promo/0.5.6/README.md', 'promo/0.5.6/capture.cjs', 'promo/0.5.6/render.py', 'promo/0.5.6/assets')
 New-PackageZip $projectRoot $sourceItems (Join-Path $outputRoot "$prefix-source.zip")
 $hashes = Get-ChildItem -LiteralPath $outputRoot -File | Sort-Object Name | ForEach-Object {
     "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"

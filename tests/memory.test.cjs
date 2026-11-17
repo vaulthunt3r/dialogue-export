@@ -28,7 +28,14 @@ test('image dimensions are budgeted before decode or canvas allocation', async (
     const img = f.w.document.querySelector('img'); loaded(img, 6000, 6000);
     let decoded = false; img.decode = async () => { decoded = true; };
     f.w.ChatArchiveMedia.beginExport();
-    await assert.rejects(f.w.ChatArchiveMedia.waitForImages(f.roots), /image memory limit/);
+    await assert.rejects(f.w.ChatArchiveMedia.waitForImages(f.roots), error => {
+      assert.match(error.message, /image memory limit.*36\.0.*25\.2 megapixels/);
+      assert.equal(error.mediaDiagnostic.exceeded, 'pixels');
+      assert.equal(error.mediaDiagnostic.attempted.assets, 1);
+      assert.equal(error.mediaDiagnostic.attempted.pixels, 36000000);
+      assert.equal(error.mediaDiagnostic.retained.assets, 0);
+      return true;
+    });
     assert.equal(decoded, false);
     assert.equal(img.getAttribute('loading'), 'lazy');
     f.w.ChatArchiveMedia.endExport();

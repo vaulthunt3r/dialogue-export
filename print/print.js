@@ -1,18 +1,34 @@
 const params = new URLSearchParams(location.search);
 const id = params.get('id');
+const partsId = params.get('parts');
 const button = document.querySelector('#printButton');
 const error = document.querySelector('#error');
 
 button.addEventListener('click', () => window.print());
 
-(async function loadDocument() {
+let currentPart = 1, totalParts = 1;
+const previousPart = document.querySelector('#previousPart'), nextPart = document.querySelector('#nextPart');
+previousPart?.addEventListener('click', () => loadDocument(currentPart - 1));
+nextPart?.addEventListener('click', () => loadDocument(currentPart + 1));
+async function loadDocument(index = 1) {
+  button.disabled = true;
+  if (previousPart) previousPart.disabled = true;
+  if (nextPart) nextPart.disabled = true;
+  error.textContent = '';
+  const target = document.querySelector('#document');
+  for (const image of target.querySelectorAll('img')) image.removeAttribute('src');
+  target.replaceChildren();
   try {
-    if (!id) throw new Error('The print job ID is missing.');
-    const result = await browser.runtime.sendMessage({ type: 'GET_PRINT_PAGE', id });
-    if (!result?.ok || !result.content) throw new Error('This print job has expired. Create it again.');
+    if (!id && !partsId) throw new Error('The print job ID is missing.');
+    const result = await browser.runtime.sendMessage(partsId ? { type: 'GET_PRINT_PART', id: partsId, index } : { type: 'GET_PRINT_PAGE', id });
+    if (!result?.ok || !result.content) throw new Error(result?.error || 'This print job has expired. Create it again.');
+    if (result.part) {
+      currentPart = index; totalParts = result.part.total;
+      document.querySelector('#partControls').hidden = false;
+      document.querySelector('#partStatus').textContent = `Part ${index} of ${totalParts} — save each part separately`;
+    }
     const parsed = new DOMParser().parseFromString(result.content, 'text/html');
     result.content = ''; // Release the serialized copy before waiting for pixels.
-    const target = document.querySelector('#document');
     const header = parsed.querySelector('header');
     const main = parsed.querySelector('main');
     if (header) target.append(document.adoptNode(header));
@@ -36,12 +52,19 @@ button.addEventListener('click', () => window.print());
         const timer = setTimeout(() => resolve(false), 60000);
         image.decode().then(() => { clearTimeout(timer); resolve(true); }, () => { clearTimeout(timer); resolve(false); });
       })));
-      if (loaded.some(ok => !ok)) error.textContent = 'Some images could not be loaded for printing. Check the preview and the original conversation.';
+      if (loaded.some(ok => !ok)) {
+        if (result.strictImages) throw new Error('An embedded image could not be decoded. PDF preparation stopped to avoid missing images.');
+        error.textContent = 'Some images could not be loaded for printing. Check the preview and the original conversation.';
+      }
     }
     document.querySelector('#printStatus').textContent = 'Your PDF layout is ready';
     button.disabled = false;
   } catch (reason) {
     document.querySelector('#printStatus').textContent = 'Could not prepare the PDF';
     error.textContent = reason?.message || String(reason);
+  } finally {
+    if (previousPart) previousPart.disabled = currentPart <= 1;
+    if (nextPart) nextPart.disabled = currentPart >= totalParts;
   }
-})();
+}
+loadDocument();

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dialogue Export — Chat archive</title><link rel="stylesheet" href="archive.css"></head>
+<body>
+  <header><h1><img src="../icons/dialogue.svg" width="26" height="26" alt=""> Chat archive</h1><p>ChatGPT · processed locally in Firefox</p></header>
+  <p class="notice">ZIP archives save text, code and tables. Images are not downloaded. Only the current saved response branch is exported; PDF and Working / Thinking are not included.</p>
+  <section aria-labelledby="loadTitle"><h2 id="loadTitle">1. Load available chats</h2>
+    <label><input id="archived" type="checkbox" checked> Include archived chats</label>
+    <button id="load" type="button">[ Load list ]</button>
+    <p class="hint">No history request is made until you click Load list. Keep the source ChatGPT tab and this archive tab open. You can read other tabs.</p>
+    <p class="hint">The list comes from ChatGPT. Project chats may be missing; compare the result with your account before relying on “all”. Deleted or unavailable chats cannot be recovered.</p>
+  </section>
+  <section id="selection" hidden aria-labelledby="selectTitle"><h2 id="selectTitle">2. Select chats</h2>
+    <div class="row"><label for="search">Find</label><input id="search" type="search" placeholder="Chat title" maxlength="300"><button id="all" type="button">[ Select all found ]</button><button id="none" type="button">[ Clear ]</button></div>
+    <p id="count" role="status"></p>
+    <p id="listHint" class="hint">20 chats per page. Scroll inside the list to see every row; use Previous / Next for more pages. Your selection stays checked across pages.</p>
+    <div id="list" aria-label="Available chats" aria-describedby="listHint"></div>
+    <div class="row"><button id="previous" type="button">[ Previous ]</button><span id="page"></span><button id="next" type="button">[ Next ]</button></div>
+  </section>
+  <section class="actions" aria-labelledby="saveTitle"><h2 id="saveTitle">3. Save ZIP</h2>
+    <div class="row"><label for="format">Files inside ZIP</label><select id="format"><option value="md">Markdown</option><option value="txt">TXT</option><option value="html">HTML</option><option value="json">JSON (exported messages)</option></select><button id="run" type="button" disabled>[ Export selected ]</button></div>
+    <p class="hint">ZIP parts save to Downloads automatically. A failed chat is skipped; if reading stops, completed chats are still saved when downloading is available. Each ZIP has an index.html and a manifest. The JSON report lists saved, failed and unattempted chats.</p>
+  </section>
+  <section class="archive-activity" aria-label="Archive progress">
+    <div class="activity-row"><p id="status" role="status" aria-live="polite">Ready to load the list.</p><span id="elapsed"></span><button id="stop" type="button" hidden>[ Stop ]</button></div>
+    <div class="activity-timeline" aria-hidden="true"><span data-stage="load">LOAD</span><span data-stage="read">READ</span><span data-stage="save">SAVE</span></div>
+    <div id="activityBar" class="activity-bar" aria-hidden="true">[............]</div>
+    <p id="progress"></p><p id="error" role="alert" hidden></p>
+    <details id="failureDetails" hidden><summary id="failureSummary">Failed chats</summary><p id="failureHint" class="hint"></p><ul id="failureList"></ul></details>
+    <button id="report" type="button" hidden>[ Save report again ]</button>
+  </section>
+  <script src="archive.js"></script>
+</body></html>

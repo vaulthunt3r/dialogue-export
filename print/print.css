@@ -32,6 +32,19 @@ code { font-family: ui-monospace, monospace; }
 table { border-collapse: collapse; width: 100%; }
 th, td { border: 1px solid #cfd4dc; padding: 7px; text-align: left; }
 img { max-width: 100%; height: auto; }
+.message { min-width: 0; overflow-wrap: anywhere; }
+.message h1, .message h2, .message h3, .message h4 { color: inherit; text-transform: none; letter-spacing: normal; line-height: 1.3; margin: 1em 0 .5em; }
+.message h1 { font-size: 26px; } .message h2 { font-size: 22px; } .message h3 { font-size: 19px; } .message h4 { font-size: 17px; }
+.message table { table-layout: fixed; }
+.message blockquote { border-left: 3px solid #cfd4dc; margin: 1em 0; padding-left: 16px; color: #596273; }
+.export-api-image { display: block; max-width: 100%; height: auto; margin: 14px 0; }
+@media print {
+  .export-api-image { max-height: 9in; width: auto; object-fit: contain; }
+  .message thead { display: table-header-group; }
+  .message th, .message td { overflow-wrap: anywhere; }
+  .chat-archive-code-short { break-inside: avoid; }
+  .message h1, .message h2, .message h3, .message h4 { break-after: avoid; }
+}
 @media print {
   body { margin: 0; max-width: none; }
   .toolbar, #error { display: none; }
@@ -49,3 +62,7 @@ img { max-width: 100%; height: auto; }
   .compact-pagination .chat-archive-code pre { break-inside: auto; overflow: visible; orphans: 3; widows: 3; }
   a { color: inherit; text-decoration: none; }
 }
+/* Image origin and actual stored dimensions remain visible in saved PDFs. */
+.export-api-figure { margin: 14px 0; break-inside: avoid; }
+.export-api-figure figcaption { font-size: 12px; color: #596273; line-height: 1.5; }
+.export-api-figure .export-api-image { margin-bottom: 6px; }

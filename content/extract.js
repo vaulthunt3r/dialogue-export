@@ -192,6 +192,28 @@
 
   function textWithLinks(source, markdown = false) {
     const clone = source.cloneNode(true);
+    if (markdown) {
+      function fencedCode(pre) {
+        const code = pre.querySelector('code') || pre;
+        const candidates = [code, pre].flatMap(element => [
+          element.getAttribute('data-language'), element.getAttribute('data-lang'),
+          ...[...element.classList].map(name => name.match(/^(?:language|lang)-(.+)$/)?.[1])
+        ]);
+        const language = (candidates.find(value => value && /^[\w+#.-]{1,40}$/.test(value)) || '').toLowerCase();
+        const value = code.textContent || '';
+        let fenceLength = 3;
+        for (const match of value.matchAll(/`+/g)) fenceLength = Math.max(fenceLength, match[0].length + 1);
+        const fence = '`'.repeat(fenceLength);
+        return `\n\n${fence}${language}\n${value}${value.endsWith('\n') ? '' : '\n'}${fence}\n\n`;
+      }
+      if (clone.matches('pre')) return fencedCode(clone).trim();
+      // Convert code first so link/image formatting cannot rewrite its contents.
+      clone.querySelectorAll('pre').forEach(pre => {
+        const block = fencedCode(pre);
+        pre.closest('.chat-archive-code')?.querySelector('.chat-archive-code-label')?.remove();
+        pre.replaceWith(document.createTextNode(block));
+      });
+    }
     clone.querySelectorAll('img').forEach(image => {
       const label = (image.getAttribute('alt') || 'Image').replace(/[\[\]\\\r\n]/g, ' ');
       const src = image.getAttribute('src') || '';
@@ -211,13 +233,13 @@
     return (clone.innerText || clone.textContent || '').trim();
   }
 
-  function cleanClone(node, includeLinks, includeMedia = true, mediaOwner) {
+  function cleanClone(node, includeLinks, includeMedia = true, mediaOwner, imageOptions = {}) {
     const source = contentRoot(node);
     if (source.textContent.length > maxPayloadCharacters) throw new Error('This export exceeds the text memory limit. Export fewer selected messages. No partial file was saved.');
     const clone = source.cloneNode(true);
     const sourceElements = [...source.querySelectorAll('*')];
     const cloneElements = [...clone.querySelectorAll('*')];
-    if (includeMedia) window.ChatArchiveMedia?.preserve(source, clone, { owner: mediaOwner, excludedRoots: mediaExclusions(source) });
+    if (includeMedia) window.ChatArchiveMedia?.preserve(source, clone, { owner: mediaOwner, excludedRoots: mediaExclusions(source), ...imageOptions });
 
     const sourceTextareas = [...source.querySelectorAll('textarea')];
     [...clone.querySelectorAll('textarea')].forEach((textarea, index) => {
@@ -318,6 +340,7 @@
       redundantText.forEach(textNode => textNode.remove());
     }
     if (!includeLinks) clone.querySelectorAll('a').forEach(a => a.replaceWith(...a.childNodes));
+    if (!includeMedia) clone.querySelectorAll('img, picture, svg, canvas, figure[data-export-media]').forEach(element => element.remove());
     return clone;
   }
 
@@ -333,12 +356,13 @@
   window.ChatArchiveExtractor = {
     nodes: messageNodes,
     idOf,
+    roleOf,
     contentRoot,
     mediaExclusions,
     payloadSize,
     maxPayloadCharacters,
     metadata() { return { title: title(), provider: provider(), url: location.href, exportedAt: new Date().toISOString() }; },
-    snapshot({ includeLinks = true, includeTimestamps = false, includeActivity = false, selectedOnly = false, outputFormat = null } = {}) {
+    snapshot({ includeLinks = true, includeTimestamps = false, includeActivity = false, selectedOnly = false, outputFormat = null, includeUserImages = true, includeAssistantImages = true, includeImageDetails = false } = {}) {
       const nodes = messageNodes();
       const activities = !isGemini && includeActivity ? activitiesByMessage(nodes, includeLinks) : new Map();
       const identifiers = new Set();
@@ -348,7 +372,9 @@
         if (identifiers.has(id)) throw new Error('A message identifier is shared by multiple messages. This interface is ambiguous; export was stopped to avoid losing content.');
         identifiers.add(id);
         if (selectedOnly && node.dataset.chatArchiveSelected !== 'true') return null;
-        const clone = cleanClone(node, includeLinks, true, id);
+        const messageRole = roleOf(node, index);
+        const keepImages = !['html', 'pdf'].includes(outputFormat) || (messageRole === 'user' ? includeUserImages : includeAssistantImages);
+        const clone = cleanClone(node, includeLinks, keepImages, id, { includeImageDetails, role: messageRole, provider: provider() });
         // Activity is serialized separately and never counted twice in the answer.
         if (!isGemini) activityRoots(clone, true).forEach(root => root.remove());
         const item = {
@@ -370,8 +396,8 @@
         return item;
       }).filter(item => item?.text);
     },
-    collect({ selectedOnly = false, includeLinks = true, includeTimestamps = false, includeActivity = false, outputFormat = null } = {}) {
-      const messages = this.snapshot({ includeLinks, includeTimestamps, includeActivity, selectedOnly, outputFormat });
+    collect(options = {}) {
+      const messages = this.snapshot(options);
       return { title: title(), provider: provider(), url: location.href, exportedAt: new Date().toISOString(), messages };
     }
   };

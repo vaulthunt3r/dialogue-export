@@ -8,19 +8,25 @@
 </head>
 <body>
   <header>
-    <img src="../icons/icon-48.png" width="30" height="30" alt="">
-    <div><h1>Dialogue Export</h1><p id="status" role="status">Connecting to your conversation…</p></div>
+    <div><h1 title="Dialogue Export"><img class="dialogue-mark" src="../icons/dialogue.svg" width="20" height="20" alt=""> EXPORT</h1><p id="status" role="status">Connecting…</p></div>
+    <button id="collapsePanel" type="button" aria-label="Collapse export menu" hidden>[-]</button>
   </header>
+  <section id="siteAccess" hidden aria-label="Automatic page icon">
+    <p id="siteAccessStatus" role="status"></p>
+    <button id="enableSiteAccess" type="button">Show icon automatically</button>
+  </section>
   <section id="activity" class="activity" hidden aria-label="Export status">
     <div class="activity-heading"><strong id="activityTitle"></strong><span id="elapsed"></span></div>
     <p id="activityDetail" role="status"></p>
+    <button id="stopExport" type="button" hidden>[Stop]</button>
     <div class="activity-track" aria-hidden="true"><span></span></div>
   </section>
   <form id="exportForm">
     <fieldset id="controls" disabled>
       <legend class="sr-only">Export settings</legend>
+      <div id="settingsContents">
       <fieldset class="field">
-        <legend>Messages</legend>
+        <legend>Current chat</legend>
         <div class="segmented scope">
           <label><input type="radio" name="scope" value="all" checked><span>All messages</span></label>
           <label><input type="radio" name="scope" value="selected"><span>Selected</span></label>
@@ -38,6 +44,7 @@
           <label class="format-html"><input type="radio" name="format" value="html"><span>HTML</span></label>
           <label class="format-json"><input type="radio" name="format" value="json"><span>JSON</span></label>
           <label class="format-pdf"><input type="radio" name="format" value="pdf"><span>PDF</span></label>
+          <button id="archiveChats" class="archive-format" type="button" title="Open the all-chat ZIP archive in a new tab; choose which chats to save" aria-label="ZIP — all chats archive, opens in a new tab" hidden>[ZIP]</button>
         </div>
         <p id="formatHint" class="hint">Markdown · for notes and text editors.</p>
       </fieldset>
@@ -46,24 +53,42 @@
         <div class="filename-field"><input id="filename" type="text" maxlength="160" placeholder="conversation" autocomplete="off" spellcheck="false" aria-describedby="filenamePreview"><span id="extension" aria-hidden="true">.md</span></div>
         <p id="filenamePreview" class="filename-preview"></p>
       </div>
-      <details class="options">
-        <summary>Export options</summary>
+      <section class="options" aria-label="Export options">
+        <details id="imageOptions" class="option-group" hidden>
+          <summary>Images</summary>
+          <label class="check"><input id="includeUserImages" type="checkbox" checked><span>User images</span></label>
+          <label class="check"><input id="includeAssistantImages" type="checkbox" checked><span>AI response images</span></label>
+          <label class="check"><input id="includeImageDetails" type="checkbox"><span>Source, size and quality</span></label>
+          <details class="help"><summary>About images</summary><p class="hint">HTML/PDF. Large direct ChatGPT exports split into numbered parts. HTML parts save to Downloads; PDF parts are printed individually. Source details identify stored dimensions and quality; original-file equivalence is not guaranteed.</p></details>
+        </details>
+        <details id="documentOptions" class="option-group">
+        <summary>Document</summary>
         <label class="check"><input id="includeTitle" type="checkbox" checked><span>Title and date in the document</span></label>
         <label class="check"><input id="includeLinks" type="checkbox" checked><span>Keep links</span></label>
         <label class="check"><input id="includeActivity" type="checkbox" aria-describedby="activityHint"><span>Include Working / Thinking sections</span></label>
-        <p id="activityHint" class="hint">ChatGPT only. Expand sections before exporting. Includes available progress and tool summaries, not vanished content.</p>
+        <details class="help"><summary>About activity</summary><p id="activityHint" class="hint">ChatGPT only. Expand sections before exporting. Includes available progress and tool summaries, not vanished content.</p></details>
         <label class="check"><input id="includeTimestamps" type="checkbox" aria-describedby="timestampsHint"><span>Include message timestamps</span></label>
-        <p id="timestampsHint" class="hint">Local date and time for each message, when available.</p>
+        <details class="help"><summary>About timestamps</summary><p id="timestampsHint" class="hint">Local date and time for each message, when available.</p></details>
         <label class="check"><input id="appendDate" type="checkbox"><span>Add today’s date to the file name</span></label>
-        <div id="compactPaginationOption" hidden>
+        </details>
+        <details id="compactPaginationOption" class="option-group" hidden>
+          <summary>PDF / print</summary>
           <label class="check"><input id="compactPagination" type="checkbox" aria-describedby="compactPaginationHint"><span>Compact PDF pagination</span></label>
-          <p id="compactPaginationHint" class="hint">Print without message boxes so text flows across pages. Applies to PDF and printing exported HTML.</p>
-        </div>
-      </details>
+          <details class="help"><summary>About pagination</summary><p id="compactPaginationHint" class="hint">Print without message boxes so text flows across pages. Applies to PDF and printing exported HTML.</p></details>
+        </details>
+        <details id="notificationOptions" class="option-group">
+          <summary>Notifications</summary>
+          <label class="check"><input id="notifyOnCompletion" type="checkbox" aria-describedby="notificationHint"><span>Notify when export finishes or stops</span></label>
+          <details class="help"><summary>About notifications</summary><p id="notificationHint" class="hint">Optional Firefox notification permission. Notifications contain no conversation title or text.</p></details>
+        </details>
+      </section>
+      </div>
     </fieldset>
+    <div class="export-actions">
     <div id="errorBox" class="error-box" hidden><p id="error" role="alert"></p><button id="retry" type="button" hidden>Try connecting again</button></div>
-    <button id="exportButton" class="primary" type="submit" disabled><span id="exportLabel">Connecting…</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button id="exportButton" class="primary" type="submit" disabled><span id="exportLabel">Connecting…</span><svg class="download-mark" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m-3-3 3 3 3-3M3 12v2h10v-2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
     <p id="actionHint" class="action-hint">Choose your format, then export.</p>
+    </div>
   </form>
   <footer><span>Processed locally in your browser</span><span id="version"></span></footer>
   <script src="popup.js"></script>

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.6 — 2026-11-17
+
+- Add direct saved-ChatGPT export for TXT/Markdown/HTML/PDF with conversation and current-branch validation, no scrolling when supported, and explicit page fallback for unsupported variants.
+- Preserve Markdown code fences, indentation, and code/table/list structure in HTML/PDF using a pinned local markdown-it parser. Ship the upstream distribution and readable source map unchanged for reproducible review.
+- Download supported image references sequentially. Add separate user-image/AI-image switches and optional source, resolution, format and quality labels. Original Download-file equivalence is not claimed.
+- Split large direct ChatGPT HTML/PDF exports into numbered parts staged in local IndexedDB. Download HTML parts sequentially; navigate and print PDF parts separately. Preserve message ranges and clean up temporary content on completion, cancellation, failure or expiry on later access.
+- Add a compact monochrome dialogue launcher and ASCII menu in the free right gutter. Keep Export accessible while settings scroll, retain persistent progress/results, and offer site-specific permission guidance when Firefox only permits access after a toolbar click.
+- Add opt-in generic completion/error notifications, off by default, using optional notification permission. No new required permissions or host scope.
+- Add text-only ChatGPT history ZIP export in a separate local tab: explicit list loading, optional archived chats, search, 20-chat pagination, cross-page selection, all-found selection, TXT/MD/HTML/normalized JSON, bounded sequential reads and numbered ZIP parts with indexes and reports.
+- Skip individual unsupported chats with fixed reasons/codes, and save the prepared ZIP remainder after a terminal read failure when downloads are available. Distinguish ready, saved, failed and unattempted counts. Show failed-chat details in the UI, preserve all rows in JSON, and never treat unconfirmed downloads as saved or retry them silently.
+- Known archive limits: no images/PDF/activity/alternate branches, no automatic resume, and unverified project coverage. A real 42-chat run saved 36 and rejected six (four RICH_REFERENCE, one MESSAGE_TYPE, one RESPONSE_UNFINISHED); all selected chats were processed and no prepared chats were lost. These parser cases await further examples and fixes.
+- Validation: 202 automated tests; isolated Firefox checks of direct export, images/printing, multipart output and ZIP archives; independent ZIP CRC/content/index verification; user-confirmed fast long-text exports and a three-part image-bearing HTML/PDF export. These do not guarantee completeness or a fixed browser-memory footprint for all chats. See docs/RELEASE-v0.5.6.md and versioned test notes.
+
 ## 0.5.5 — 2026-10-24
 
 - Preserve loaded images, standalone generated-image replies, static SVG diagrams and readable canvas snapshots in HTML/PDF. Normalize fixed-height galleries so images do not overlap the next message.

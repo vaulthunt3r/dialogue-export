@@ -1,5 +1,5 @@
 # Mozilla Add-ons submission notes
 
-The current signed version is **0.5.5**. Use [the versioned submission record](AMO_SUBMISSION-v0.5.5.md) for the uploaded package, reviewer notes, release note and reproduction instructions.
+**0.5.6 is Mozilla-signed.** See [the 0.5.6 submission record](AMO_SUBMISSION-v0.5.6.md) for reviewer notes, reproducible packaging and signed-file verification. The exact source originally supplied for review is retained as `Dialogue-Export-v0.5.6-AMO-source.zip`; the public source ZIP adds release documentation and promotional assets without changing the runtime.
 
-Mozilla returned the signed XPI, and its runtime contents were compared with the original `Dialogue-Export-v0.5.5-AMO.zip`. Only manifest formatting and signing metadata differ. Users should install `Dialogue-Export-v0.5.5-signed.xpi` from the [release](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.5); the source archive and complete release-kit archive are not installation packages.
+Mozilla returned the signed XPI, and its 43 runtime files were compared with the original `Dialogue-Export-v0.5.6-AMO.zip`. Only manifest formatting and added signature metadata differ. Install `Dialogue-Export-v0.5.6-signed.xpi` from the [release](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.6); the source archive and complete release-kit archive are not installation packages.

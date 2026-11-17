@@ -1,198 +1,85 @@
 # <img src="icons/icon-48.png" width="32" height="32" alt=""> Dialogue Export
 
-Dialogue Export is a Firefox extension for saving an open ChatGPT or Google Gemini conversation as TXT, Markdown, HTML, JSON, or PDF.
+**Keep your ChatGPT conversations. In files you can use.**
 
-Everything is processed locally in Firefox. The extension does not upload conversations, use analytics, or send telemetry.
+A Firefox extension for exporting a conversation to **TXT, Markdown, HTML, JSON or PDF**, and saving multiple ChatGPT conversations in a **ZIP archive**. Compact monochrome controls, readable output and local processing.
 
-## 0.5.5 — images, code blocks and long-conversation fixes
+**[Install 0.5.6 — Mozilla-signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-v0.5.6-signed.xpi)** · [All release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.6) · [What's new](docs/RELEASE-v0.5.6.md)
 
-- Preserve loaded images, standalone generated-image replies, static SVG diagrams and canvas snapshots in HTML/PDF. Gallery images take their natural height without overlapping following text.
-- Preserve modern ChatGPT code blocks with language labels, indentation and supported syntax colors.
-- Improve collection across long and virtualized conversations. Broken decorative website icons no longer block text exports, including Google `faviconV2` icons.
-- Wait for content images, limit concurrent decoding and retained data, release export caches, and offer **Stop** during collection. Oversized exports stop with an explanation.
+## See it in a minute
 
-The user confirmed successful export of a very long text conversation with the tested 0.5.5 runtime on October 24, 2026. This is not proof of completeness for every chat or interface.
+[![Watch the Dialogue Export feature tour: formats, images, numbered parts and ZIP archives](docs/media/Dialogue-Export-poster.png)](docs/media/Dialogue-Export-0.5.6-trailer-EN.mp4)
 
-**Large or image-heavy chats remain a known limitation.** A previous test exported only part of an image-heavy conversation while reporting success, and a later test exhausted memory. The resource limits reduce extension allocations but do not cap Firefox or ChatGPT's total memory. That heavy conversation has not been revalidated. Check the beginning, middle and end of important exports; automatic multipart output is not included in 0.5.5.
+**[Watch the 60-second tour](docs/media/Dialogue-Export-0.5.6-trailer-EN.mp4)** · [Download MP4](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-0.5.6-trailer-EN.mp4)
 
-Download the **[Mozilla-signed 0.5.5 XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.5/Dialogue-Export-v0.5.5-signed.xpi)** for permanent installation. See [all release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.5), [release notes](docs/RELEASE-v0.5.5.md) and [validation details](docs/TEST-v0.5.5.md).
+English titles and original music. The tour uses fictional conversations and demonstration data.
 
-### Wishlist
+## What you can save
 
-- ZIP export containing the conversation and separate **original image files**, where the service makes them accessible to the user. Preview images must be clearly distinguished from originals.
-- Automatic numbered parts for large exports, with message order, image associations and completeness checks preserved.
-- Further testing and fixes for very long image-heavy chats, including incomplete exports and memory use.
+| | Current conversation | Multiple ChatGPT conversations |
+| --- | --- | --- |
+| Formats | TXT, MD, HTML, JSON, PDF | ZIP containing TXT, MD, HTML or normalized JSON |
+| Selection | All messages or selected messages | Choose chats, search, select across pages or select all found |
+| Code and tables | Code blocks, indentation and structured HTML/PDF | Code and tables in supported text/HTML formats |
+| Images | Supported images in HTML/PDF; separate user and AI switches | Text-only; image files are not included |
+| Large exports | Numbered parts for large **direct ChatGPT HTML/PDF** exports | Numbered ZIP parts with indexes and a report |
+| Status | Progress, elapsed time, Stop and optional notifications | Ready/saved/failed counts and per-chat error explanations |
 
-These are future work, **not features of 0.5.5**. See the [wishlist and proposed behavior](docs/WISHLIST.md); no delivery date is promised.
+### Faster reading for saved ChatGPT chats
 
-## 0.5.4 — compact printing and optional activity sections
+Version 0.5.6 adds direct reading of saved ChatGPT conversation data using your existing session. Supported **All messages → TXT/MD/HTML/PDF** exports no longer need to scroll the page to collect messages. The reader checks the conversation identity and follows the current response branch.
 
-- **Compact PDF pagination** lets messages continue across pages without message boxes in print. It applies to PDF and printing exported HTML; screen HTML keeps its appearance.
-- **Include Working / Thinking sections** saves available ChatGPT progress text and tool summaries before the associated answer in every format. Expand sections before exporting. Collapsed sections receive a missing-content notice; vanished content cannot be recovered. HTML sections can be collapsed after export. This option is unavailable for Gemini.
+Page collection remains available for temporary chats, selected messages, Working / Thinking sections, single-chat JSON and unsupported direct-export cases. The status explains when it is used. The internal ChatGPT API can change, so direct export is not guaranteed for every conversation.
 
-Both options are off by default under **Export options**. See [release notes](docs/RELEASE-v0.5.4.md) for validation and limitations. Download the Mozilla-signed XPI from [release 0.5.4](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.4).
+During user testing, a conversation containing **over 35,000 Markdown lines** exported quickly and completely; TXT, HTML and PDF were also confirmed. This is a user-reported result, not a controlled speed benchmark or a guarantee for every chat.
 
-## Important: use 0.5.3 or later and check previous exports
+### Images and printable documents
 
-**0.5.2 can mix messages from another ChatGPT conversation into an export even when its title and source URL are correct.** Check important previous exports before sharing them and re-export affected files. If an affected file was shared, review and replace or remove that copy where possible.
+Choose whether to include user images, AI-response images and source/size/quality details. Downloaded raster bytes are not re-encoded, but an available image may be a preview: equivalence to ChatGPT's **Download** original is not guaranteed.
 
-The collector searched the whole document without excluding hidden message trees or checking conversation ownership. Retained message markup could therefore enter the export while its title and URL came from the current chat. This mechanism was reproduced locally; VPN/DNS causality has not been established.
+Large direct HTML/PDF exports can split into numbered parts. HTML parts download sequentially. PDF opens a print page; select **Save as PDF** and print each part separately. **Compact PDF pagination** removes message boxes in print so text can flow across pages with fewer large gaps. It does not change the on-screen HTML layout.
 
-[Version 0.5.3](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.3) excludes hidden messages and previews outside the main area, rejects conflicting conversation IDs, and stops if the URL changes during collection. Install the signed XPI and reload ChatGPT. The affected user confirmed correct content and successful HTML/PDF checks. See [release notes](docs/RELEASE-v0.5.3.md).
+### Several chats, one ZIP workflow
 
-## 0.5.2 — ChatGPT interface compatibility (superseded by 0.5.3)
+Choose **ZIP** to open the local archive tab, then **Load list**. Search active or archived conversations, select the ones you need, choose the format inside the ZIP and export. Each ZIP part includes an index and manifest; the final report lists saved, failed and unattempted chats.
 
-Adds support for the newer ChatGPT message containers reported in issue #2,
-including both authors and ordering across virtualized conversation windows.
-Supports hidden-overflow scroll containers and negative scroll offsets, with an
-explicit error if scrolling stalls. The reporter confirmed that the second build
-exported a 301-message conversation; a quick review found it intact from beginning
-to end, though every message was not individually checked. Thanks to **hexgf** for
-the detailed diagnostics and fast testing. A Mozilla-signed installation package
-is included in the 0.5.2 release as `Dialogue-Export-v0.5.2-signed.xpi`.
-See [installation and verification notes](docs/CHATGPT-UI-v0.5.2.md).
+Unsupported chats are skipped while the others continue. If a later read error stops the queue, already prepared chats are saved when downloading remains available. **Stop** cancels unsaved work; completed downloads remain.
 
-## 0.5.1 — optional message timestamps
+## Install and start
 
-This version adds the feature requested in [issue #1](https://github.com/vaulthunt3r/dialogue-export/issues/1). A Mozilla-signed installation package is included with this release as `Dialogue-Export-v0.5.1-signed.xpi`.
+1. Download the [signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-v0.5.6-signed.xpi), open it in **Firefox 142 or later** and confirm installation.
+2. Open or reload a ChatGPT conversation. Click the dialogue icon in the page margin or on the Firefox toolbar.
+3. Choose your messages and format, review **Export options**, then press **Export** or **Prepare PDF**. Keep the source tab open until collection finishes.
 
-Open a ChatGPT conversation and enable **Export options → Include message timestamps**. The option is off by default and remembered for your next export.
+**Page icon missing?** Firefox may allow the extension to run only after a toolbar click. Use **Show icon automatically** in the toolbar popup, or grant persistent access to ChatGPT through Firefox's extension menu, then reload the page.
 
-- TXT and Markdown place the message's local date and time below the author.
-- HTML and PDF display a small date/time line below the author.
-- JSON stores `createdAt` in UTC ISO 8601 format, for example `2026-09-07T10:42:00.000Z`.
-- If the page does not provide a message's creation time, its text is still exported. The document and completion status explain how many timestamps were available. JSON uses `createdAt: null` for missing times.
-- The existing **Title and date in the document** option still controls the document's export date. It is separate from message timestamps.
+Optional completion notifications are off by default. Enable them if you want a notification while reading another tab. A ready PDF layout still needs to be saved through Firefox's print dialog.
 
-Message timestamps currently support **ChatGPT only**. The control is disabled on Gemini with an explanation. Plain Gemini exports continue to work.
+## Current limits
 
-Dates are read from message metadata already present on the page and matched to the exact message ID. The extension makes no additional network requests. Internal website structures can change, so timestamp availability is not guaranteed. No time is invented or replaced with the export time.
+- **ZIP is a text archive, not a complete account backup.** It excludes image files, PDF, Working / Thinking sections and alternative branches. Project-chat coverage is unverified; JSON is the normalized exported message model. There is no automatic resume.
+- **Some chat content is still unsupported.** A real 42-chat archive run saved 36 and rejected six: four `RICH_REFERENCE`, one `MESSAGE_TYPE` and one `RESPONSE_UNFINISHED`. These cases remain open. The report explains failures; try exporting an affected chat separately from its page.
+- **Very large or image-heavy chats still have limits.** Numbered parts reduce retained output, but response, image and message limits remain. They do not cap Firefox's total RAM. One image-bearing chat was confirmed in three HTML/PDF parts; coverage of every heavy chat is not established.
+- **Activity export includes only available content.** Expand Working / Thinking sections first. Content that ChatGPT has removed cannot be recovered. Interactive applications and some embedded media cannot be reproduced faithfully.
 
-See [the v0.5.1 verification notes](docs/TIMESTAMPS-v0.5.1.md) for tests and limitations.
+Check the beginning, middle and end of important exports. [Report a problem](https://github.com/vaulthunt3r/dialogue-export/issues) with the extension/browser version and error code; private conversation text is usually unnecessary. Archive reports contain chat titles and IDs, so review them before sharing.
 
-## 0.5.0 — a clearer export interface
+**Coming next:** more supported message variants, ZIP with separate original image files where available, and broader large-chat testing. See the [wishlist](docs/WISHLIST.md).
 
-Version 0.5.0 makes exporting easier to follow. Choose a format, review your options, and press **Export**. A Mozilla-signed XPI is included in the release assets for permanent installation in Firefox 142 or later.
+## Compatibility and privacy
 
-New in this version:
+ChatGPT is the focus of the direct-reading and ZIP features. **Google Gemini remains supported for current-conversation exports through page collection**; it does not have the ChatGPT direct reader or history ZIP workflow.
 
-- Choose a format first, then use one explicit **Export** button.
-- Remember the last format and export options.
-- Preview the file name and optionally append today's date.
-- Reconnect from the same popup if the conversation did not respond.
-- See the current export stage, elapsed time, and collected-message count when reopening the popup.
-- Show selection tools only in **Selected**, with a live count and **Clear** on the page. Press **Escape** to finish choosing.
-- Follow page theme changes and show keyboard focus clearly.
-- Carry the suggested PDF filename to the print page.
+Processing takes place in Firefox. There are no developer uploads, analytics or telemetry. Direct export makes authenticated requests to ChatGPT after your action; it is not an offline retrieval method. Temporary multipart storage, image requests and permissions are explained in the [privacy policy](PRIVACY.md).
 
-See [the frontend review](docs/FRONTEND_REVIEW_RU.md) for the findings, changes, and verification limits.
+**Upgrading from 0.5.2?** That version could mix messages from another conversation. Review important old exports and re-export affected files with the current version. [Details of the 0.5.3 fix](docs/RELEASE-v0.5.3.md).
 
-## Important update for v0.2.0 users
+## Development and acknowledgments
 
-Version 0.2.0 could save only the part of a long ChatGPT conversation that was currently loaded on the page. ChatGPT removes older messages from the page while you scroll, so an export could look successful while still being incomplete.
+From the source archive, run `npm ci --ignore-scripts` and `npm test`. Runtime files are readable JavaScript plus a pinned local Markdown parser. [Reproduction and packaging instructions](docs/AMO_SUBMISSION-v0.5.6.md) document the submitted package; the [release notes](docs/RELEASE-v0.5.6.md) link the validation evidence. For a temporary Firefox installation, extract the runtime ZIP and load its `manifest.json` through `about:debugging#/runtime/this-firefox`.
 
-Version 0.4.2 introduced the loading routine that was tested successfully during development. Dialogue Export moves through the conversation, requests earlier sections, and remembers discovered messages. Slow loading and website changes can still affect completeness; check the first and last messages in important exports.
+The direct-reading approach was inspired by **[John2022 / ChatGPT Conversation Export](https://github.com/John2022/chatgpt-conversation-export)**. Thank you for demonstrating the benefit of retrieving conversation data directly. Dialogue Export combines direct reading with its existing page collector, validation, output formats and archive workflow. [markdown-it](https://github.com/markdown-it/markdown-it) handles Markdown rendering locally; dependency and icon notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-If you installed v0.2.0, update to the latest release before exporting long conversations.
+[MIT License](LICENSE) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Trailer sources](promo/0.5.6/README.md)
 
-## Features
-
-- Export the entire open conversation.
-- Export only messages selected by the user.
-- Support ChatGPT and Google Gemini.
-- Save as TXT, Markdown, HTML, JSON, or PDF.
-- Continue working after the popup is closed.
-- Load and collect long ChatGPT conversations automatically.
-- Preserve ordinary text, paragraphs, lists, and links.
-- Keep link destinations in TXT, Markdown, HTML, PDF, and JSON.
-- Use an interface that follows the conversation page's light or dark theme.
-- Show export progress on the page and on the Firefox toolbar icon.
-- Process everything locally with no accounts, analytics, or external servers.
-
-## Interface and local processing
-
-![Dialogue Export interface overview](docs/screenshots/dialogue-export-interface.png)
-
-![How Dialogue Export processes a conversation locally](docs/screenshots/dialogue-export-privacy-flow.png)
-
-These presentation images illustrate the interface with fictional conversation data. For a working interface preview in light and dark themes, open `tests/preview.html` from the source archive.
-
-## Supported websites
-
-- `https://chatgpt.com/`
-- `https://gemini.google.com/`
-
-Dialogue Export is an independent project and is not affiliated with or endorsed by OpenAI or Google.
-
-## Installation
-
-### Permanent installation
-
-1. Open the [latest GitHub release](https://github.com/vaulthunt3r/dialogue-export/releases/latest).
-2. Download the `Dialogue-Export-v…-signed.xpi` file from the release assets.
-3. Open the file in Firefox and confirm the installation.
-
-A permanent installation requires a version signed by Mozilla. If the newest release does not contain a signed `.xpi` yet, use the temporary source installation below while it is being reviewed.
-
-### Temporary installation from source
-
-1. Extract the current `Dialogue-Export-v0.5.5.zip` (or the source archive).
-2. Open `about:debugging#/runtime/this-firefox` in Firefox.
-3. Select **Load Temporary Add-on**.
-4. Choose `manifest.json` from the extracted folder.
-5. Open or refresh a conversation on ChatGPT or Gemini.
-
-Temporary installations are removed when Firefox restarts.
-
-## How to use
-
-1. Open a conversation on ChatGPT or Gemini.
-2. Select the Dialogue Export icon on the Firefox toolbar.
-3. Leave **All messages** selected to load and collect the open conversation.
-4. To save only part of it, choose **Selected**, select **Choose messages**, and mark the required messages on the page.
-5. Choose TXT, MD, HTML, JSON, or PDF. Selecting a format does not start an export.
-6. Review the file name. Expand **Export options** to control the document title/date, links, message timestamps on ChatGPT, and date in the file name.
-7. Click **Export TXT/MD/HTML/JSON** or **Prepare PDF**.
-8. Keep the conversation tab open. You may close the popup and reopen it to see progress.
-9. Complete Firefox's save dialog. “File sent to Firefox” confirms the handoff; check Downloads for the final result.
-
-For PDF, Dialogue Export opens a printable page. Select **Save as PDF**, then choose Firefox's PDF destination. The print page uses your suggested filename; the final name can also be edited in Firefox.
-
-## Format notes
-
-- **TXT** is best for simple, readable text.
-- **Markdown** adds headings for User and ChatGPT or Gemini and writes links as `[label](URL)`.
-- **HTML** preserves more visual structure and clickable links.
-- **JSON** contains message metadata, text, and cleaned HTML.
-- **PDF** creates a print-friendly document through Firefox.
-
-Dialogue Export is designed primarily for ordinary text conversations. Complex interactive canvases, generated applications, and some embedded media may not be reproduced exactly.
-
-Embedded images preserve the resolution loaded by the page, which may be a preview rather than the original Download file. Unreadable remote images can remain explicitly labelled external references and may need a valid session. Reloading a PDF preparation tab requires a new export; an already-open prepared page remains usable for printing.
-
-## Privacy
-
-Conversation content is read only when the user starts an export. Processing occurs inside Firefox, and the result is passed directly to Firefox's download or print interface. See [PRIVACY.md](PRIVACY.md).
-
-## Project structure
-
-- `content/extract.js` — detects messages and prepares their content.
-- `content/content.js` — handles collection, scrolling, selection, and progress.
-- `shared/renderers.js` — creates TXT, Markdown, HTML, JSON, and printable output.
-- `background.js` — handles downloads, PDF handoff, and the toolbar badge.
-- `popup/` — extension controls.
-- `print/` — printable PDF page.
-
-## Development checks
-
-Install the pinned development dependencies with `npm install`, then run `npm test` (Node.js 18 or later). These dependencies are for tests only; the extension has no runtime npm dependencies or build step.
-
-The tests simulate WebExtension messages and page DOMs. They do not replace testing a signed extension, the real Firefox download/print dialogs, or a long conversation in a logged-in ChatGPT/Gemini session.
-
-To validate an installation package with Mozilla's linter, run `npx web-ext lint --source-dir . --ignore-files 'tests/**' 'docs/**' 'package*.json'`. Keep test fixtures and development dependencies out of the package submitted for signing.
-
-## License
-
-Dialogue Export is released under the [MIT License](LICENSE). Third-party icon information is available in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-Created with love by **vaulthunt3r**.
+Created by **vaulthunt3r**. Independent project; not affiliated with or endorsed by OpenAI or Google.

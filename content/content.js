@@ -7,6 +7,7 @@
   let forwardAnchor = null;
   let activeExport = false;
   let exportStatus = null;
+  let activePartJobId = null;
   let uiTimer;
   let collectingUrl = null;
   let cancelRequested = false;
@@ -43,8 +44,9 @@
       await window.ChatArchiveMedia?.waitForImages(() => {
         assertConversation();
         const extractor = window.ChatArchiveExtractor;
-        return extractor.nodes().map((node, index) => ({ node, owner: extractor.idOf(node, index) }))
+        return extractor.nodes().map((node, index) => ({ node, owner: extractor.idOf(node, index), role: extractor.roleOf(node, index) }))
           .filter(({ node }) => !options.selectedOnly || node.dataset.chatArchiveSelected === 'true')
+          .filter(({ role }) => (role === 'user' ? options.includeUserImages : options.includeAssistantImages) !== false)
           .map(({ node, owner }) => {
             const root = extractor.contentRoot(node);
             return { node: root, owner, excludedRoots: extractor.mediaExclusions(root) };
@@ -271,6 +273,19 @@
   }
 
   async function collectCurrent(options = {}, onProgress = () => {}) {
+    if (window.ChatArchiveApi?.eligible(options)) {
+      const result = await window.ChatArchiveApi.collect(options, assertConversation, onProgress, options.onPart);
+      if (result.data) {
+        if (exportStatus) exportStatus.collectionNotice = ['html', 'pdf'].includes(options.outputFormat)
+          ? `direct ${options.outputFormat.toUpperCase()} export${result.data.embeddedImages ? ` · ${result.data.embeddedImages} images embedded` : ''}` : 'direct text export';
+        return result.data;
+      }
+      if (exportStatus) {
+        exportStatus.collectionNotice = `${result.fallback} Page collection was used.`;
+        exportStatus.sourceDiagnostic = result.sourceDiagnostic || null;
+      }
+      onProgress(2, `${result.fallback} Reading the page instead.`);
+    }
     if (options.selectedOnly) {
       await prepareImages(options);
       const selected = window.ChatArchiveExtractor.collect(options);
@@ -348,6 +363,7 @@
 
   function syncAppearance() {
     const theme = pageTheme();
+    window.ChatArchivePanel?.theme(theme);
     document.querySelectorAll('.chat-archive-picker, .chat-archive-selection-bar, .chat-archive-progress').forEach(node => {
       if (node.dataset.theme !== theme) node.dataset.theme = theme;
     });
@@ -355,6 +371,8 @@
     if (elapsed && exportStatus) {
       const seconds = Math.max(0, Math.floor(((exportStatus.finishedAt ?? Date.now()) - exportStatus.startedAt) / 1000));
       setText(elapsed, `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
+      const bar = document.querySelector('.chat-archive-ascii');
+      if (bar) setText(bar, exportStatus.state === 'done' ? '[##########]' : exportStatus.state === 'error' ? '[! stopped]' : `[${'.'.repeat(seconds % 10)}>${'.'.repeat(9 - seconds % 10)}]`);
     }
     if (!picking && !activeExport && !document.querySelector('.chat-archive-progress')) {
       clearInterval(uiTimer); uiTimer = null;
@@ -384,22 +402,34 @@
       dismiss.textContent = '×'; dismiss.setAttribute('aria-label', 'Dismiss export status');
       dismiss.addEventListener('click', () => {
         if (activeExport) { cancelRequested = true; dismiss.disabled = true; }
-        else { view.remove(); syncAppearance(); }
+        else {
+          view.remove(); window.ChatArchivePanel?.status(null); window.ChatArchivePanel?.layout(); syncAppearance();
+          browser.runtime.sendMessage({ type: 'EXPORT_DISMISSED' }).catch(() => {});
+        }
       });
       row.append(title, elapsed, dismiss);
       const detail = document.createElement('div'); detail.className = 'chat-archive-progress-detail';
+      const more = document.createElement('details'); more.className = 'chat-archive-progress-more';
+      const summary = document.createElement('summary'); summary.textContent = '[+] Details';
+      more.append(summary, detail);
       const timeline = document.createElement('div');
       timeline.className = 'chat-archive-timeline';
       timeline.setAttribute('aria-hidden', 'true');
       for (let index = 0; index < 3; index++) timeline.append(document.createElement('i'));
-      view.append(row, detail, timeline);
-      document.body.append(view);
+      const bar = document.createElement('div'); bar.className = 'chat-archive-ascii'; bar.setAttribute('aria-hidden', 'true');
+      view.append(row, timeline, bar, more);
+      if (window.ChatArchivePanel) window.ChatArchivePanel.attach(view); else document.body.append(view);
     }
     view.dataset.state = state;
+    view.querySelector('.chat-archive-progress-more summary').textContent = `[+] ${processed} messages`;
+    if (state === 'error') view.querySelector('.chat-archive-progress-more').open = true;
+    window.ChatArchivePanel?.status(state);
+    if (exportStatus) exportStatus.cancellable = state === 'running' && percent < 98 && !cancelRequested;
     setText(view.querySelector('.chat-archive-progress-title'), label);
-    setText(view.querySelector('.chat-archive-progress-detail'), state === 'error' ? 'Open Dialogue Export to try again.' : `${processed} messages collected${state === 'running' ? ' · keep this tab open' : exportStatus?.format === 'pdf' ? ' · save from the print page' : ' · check the save dialog or Downloads'}${state === 'done' && exportStatus?.timestampNotice ? ` · ${exportStatus.timestampNotice}` : ''}`);
+    const detail = state === 'error' ? 'Open Dialogue Export to try again.' : `${processed} messages collected${state === 'running' ? ' · keep this tab open' : exportStatus?.format === 'pdf' ? ' · save from the print page' : ' · check the save dialog or Downloads'}${state === 'done' && exportStatus?.timestampNotice ? ` · ${exportStatus.timestampNotice}` : ''}`;
+    setText(view.querySelector('.chat-archive-progress-detail'), `${detail}${exportStatus?.collectionNotice ? ` · ${exportStatus.collectionNotice}` : ''}`);
     const dismiss = view.querySelector('.chat-archive-dismiss');
-    dismiss.textContent = state === 'running' ? 'Stop' : '×';
+    dismiss.textContent = state === 'running' ? '[Stop]' : '[x]';
     dismiss.setAttribute('aria-label', state === 'running' ? 'Stop export' : 'Dismiss export status');
     // Handoff cannot be cancelled after the browser has received the file.
     dismiss.disabled = state === 'running' && (cancelRequested || percent >= 98);
@@ -411,12 +441,22 @@
       pre.style.cssText = 'max-height:160px;overflow:auto;white-space:pre-wrap;font-size:11px;user-select:text';
       details.append(summary, pre); view.append(details);
     }
+    view.querySelector('.chat-archive-source-diagnostic')?.remove();
+    if (state !== 'running' && exportStatus?.sourceDiagnostic) {
+      const details = document.createElement('details'); details.className = 'chat-archive-source-diagnostic';
+      const summary = document.createElement('summary'); summary.textContent = 'Direct export diagnostic (no conversation text or URLs)';
+      const pre = document.createElement('pre'); pre.textContent = JSON.stringify(exportStatus.sourceDiagnostic, null, 2);
+      pre.style.cssText = 'max-height:160px;overflow:auto;white-space:pre-wrap;font-size:11px;user-select:text';
+      details.append(summary, pre); view.append(details);
+    }
     // These segments represent loading, collecting, and preparing the file.
     // The site does not tell us the total message count or time remaining.
     const stage = percent < 20 ? 0 : percent < 98 ? 1 : 2;
     [...view.querySelector('.chat-archive-timeline').children].forEach((segment, index) => {
       segment.className = state === 'done' || index < stage ? 'done' : state === 'running' && index === stage ? 'current' : '';
+      segment.textContent = ['LOAD', /image/i.test(label) ? 'IMAGES' : 'READ', 'SAVE'][index];
     });
+    window.ChatArchivePanel?.layout();
     watchAppearance();
     return view;
   }
@@ -426,6 +466,21 @@
     cancelRequested = false;
     setPicking(false);
     exportStatus = { state: 'running', label: 'Preparing export', format: job.format, processed: 0, startedAt: Date.now() };
+    const startUrl = location.href;
+    let partSession = null, savingParts = false, savedParts = 0, interrupted = false;
+    const sendParts = async request => {
+      const result = await browser.runtime.sendMessage(request);
+      if (!result?.ok) throw new Error(result?.error || 'Firefox could not prepare the export parts.');
+      return result;
+    };
+    const checkParts = () => {
+      if (interrupted || cancelRequested || location.href !== startUrl) throw new Error('Multipart export stopped or the conversation changed.');
+    };
+    const monitor = setInterval(() => {
+      if (!partSession || interrupted || (!cancelRequested && location.href === startUrl)) return;
+      interrupted = true;
+      browser.runtime.sendMessage({ type: 'EXPORT_PARTS_ABORT', id: partSession }).catch(() => {});
+    }, 100);
     try {
       const update = (percent, label, processed = 0) => {
         Object.assign(exportStatus, { label, processed });
@@ -433,26 +488,62 @@
         browser.runtime.sendMessage({ type: 'EXPORT_PROGRESS', percent, stage: percent < 20 ? 'LOAD' : percent < 98 ? 'READ' : 'SAVE' }).catch(() => {});
       };
       update(1, 'Preparing export');
-      const data = await collectComplete({ ...job.options, outputFormat: job.format, waitForImages: job.format === 'html' || job.format === 'pdf' }, update);
+      const onPart = async data => {
+        checkParts();
+        if (!partSession) {
+          partSession = (await sendParts({ type: 'EXPORT_PARTS_START', job })).id;
+          activePartJobId = partSession;
+        }
+        checkParts();
+        await sendParts({ type: 'EXPORT_PARTS_STAGE', id: partSession, data });
+      };
+      const data = await collectComplete({ ...job.options, outputFormat: job.format, waitForImages: job.format === 'html' || job.format === 'pdf',
+        onPart: ['html', 'pdf'].includes(job.format) ? onPart : undefined }, update);
       assertConversation();
       if (data.url !== location.href) throw new Error('The conversation changed during export. Please retry.');
-      if (!data.messages.length) throw new Error(job.options.selectedOnly ? 'No messages selected.' : 'No messages found.');
-      if (job.options.includeTimestamps) {
+      if (!data.messages.length && !data.multipart) throw new Error(job.options.selectedOnly ? 'No messages selected.' : 'No messages found.');
+      if (job.options.includeTimestamps && !data.multipart) {
         data.messageTimestamps = ChatArchiveTimestamps.summarize(data.messages);
         exportStatus.timestampNotice = ChatArchiveTimestamps.notice(data.messageTimestamps);
       }
-      update(98, 'Preparing file', data.messages.length);
-      const result = await browser.runtime.sendMessage({ type: 'EXPORT_READY', job, data });
-      if (!result?.ok) throw new Error(result?.error || 'Firefox could not receive the file.');
-      Object.assign(exportStatus, { state: 'done', label: job.format === 'pdf' ? 'Print page opened' : 'File sent to Firefox', finishedAt: Date.now() });
-      const view = progressView(100, exportStatus.label, 'done', data.messages.length);
-      const completedJob = exportStatus;
-      setTimeout(() => { if (exportStatus === completedJob && !activeExport) { view.remove(); syncAppearance(); } }, 15000);
+      const count = data.multipart?.messages || data.messages.length;
+      if (data.multipart) {
+        checkParts();
+        await sendParts({ type: 'EXPORT_PARTS_SEAL', id: partSession, summary: data.multipart });
+        if (job.format === 'pdf') {
+          update(98, `Opening PDF preview · ${data.multipart.parts} parts`, count);
+          await sendParts({ type: 'EXPORT_PARTS_PRINT', id: partSession });
+        } else {
+          savingParts = true;
+          for (let index = 1; index <= data.multipart.parts; index++) {
+            checkParts();
+            update(97, `Saving part ${index} of ${data.multipart.parts} to Downloads`, count);
+            await sendParts({ type: 'EXPORT_PARTS_SAVE', id: partSession, index });
+            savedParts++;
+          }
+        }
+        checkParts();
+        partSession = null; activePartJobId = null;
+      } else {
+        update(98, 'Preparing file', count);
+        const result = await browser.runtime.sendMessage({ type: 'EXPORT_READY', job, data });
+        if (!result?.ok) throw new Error(result?.error || 'Firefox could not receive the file.');
+      }
+      const label = data.multipart ? job.format === 'pdf' ? `Print page opened · ${data.multipart.parts} parts` : `${savedParts} HTML parts saved to Downloads`
+        : job.format === 'pdf' ? 'Print page opened' : 'File sent to Firefox';
+      Object.assign(exportStatus, { state: 'done', label, finishedAt: Date.now() });
+      progressView(100, exportStatus.label, 'done', count);
+      browser.runtime.sendMessage({ type: 'EXPORT_COMPLETE', format: job.format, parts: data.multipart?.parts || 1,
+        notify: job.options.notifyOnCompletion === true }).catch(() => {});
     } catch (error) {
-      Object.assign(exportStatus, { state: 'error', label: error?.message || String(error), mediaDiagnostic: error?.mediaDiagnostic || null, finishedAt: Date.now() });
+      const prefix = savingParts ? `Export incomplete. ${savedParts} part(s) confirmed saved; numbered files may remain in Downloads. ` : '';
+      Object.assign(exportStatus, { state: 'error', label: prefix + (error?.message || String(error)), mediaDiagnostic: error?.mediaDiagnostic || null, finishedAt: Date.now() });
       progressView(100, exportStatus.label, 'error', exportStatus.processed);
-      browser.runtime.sendMessage({ type: 'EXPORT_FAILED' }).catch(() => {});
+      browser.runtime.sendMessage({ type: 'EXPORT_FAILED', notify: job.options.notifyOnCompletion === true }).catch(() => {});
     } finally {
+      clearInterval(monitor);
+      if (partSession) await browser.runtime.sendMessage({ type: 'EXPORT_PARTS_ABORT', id: partSession }).catch(() => {});
+      activePartJobId = null;
       activeExport = false;
       cancelRequested = false;
     }
@@ -466,7 +557,7 @@
     button.dataset.selected = String(selected);
     button.setAttribute('aria-pressed', String(selected));
     button.setAttribute('aria-label', selected ? 'Exclude this message' : 'Include this message');
-    setText(button, selected ? '✓' : '+');
+    setText(button, selected ? '[x]' : '[ ]');
     node.classList.toggle('chat-archive-picked', picking && selected);
   }
   function decorate() {
@@ -502,7 +593,8 @@
       clear.textContent = 'Clear'; clear.addEventListener('click', clearSelection);
       const done = document.createElement('button'); done.type = 'button'; done.textContent = 'Done';
       done.title = 'Finish choosing messages (Escape)'; done.addEventListener('click', () => setPicking(false));
-      bar.append(label, clear, done); document.body.append(bar);
+      bar.append(label, clear, done);
+      if (window.ChatArchivePanel) window.ChatArchivePanel.attach(bar); else document.body.append(bar);
     }
     const count = selectionCount();
     setText(bar.querySelector('span'), `${count} selected`);
@@ -539,6 +631,7 @@
   });
 
   window.addEventListener('pagehide', () => {
+    if (activePartJobId) browser.runtime.sendMessage({ type: 'EXPORT_PARTS_ABORT', id: activePartJobId }).catch(() => {});
     observer?.disconnect();
     clearInterval(uiTimer); uiTimer = null;
   });
@@ -550,6 +643,16 @@
   });
 
   browser.runtime.onMessage.addListener(request => {
+    if (request.type?.startsWith('HISTORY_')) {
+      if (request.type === 'HISTORY_START' && activeExport) return Promise.resolve({ ok: false, code: 'BUSY' });
+      return window.ChatArchiveHistory?.handle(request) || Promise.resolve({ ok: false, code: 'SESSION_ENDED' });
+    }
+    if (request.type === 'PANEL_COLLAPSE') { window.ChatArchivePanel?.collapse(); return Promise.resolve({ ok: true }); }
+    if (request.type === 'PANEL_SIZE') { window.ChatArchivePanel?.size(request.height); return Promise.resolve({ ok: true }); }
+    if (request.type === 'STOP_EXPORT') {
+      if (activeExport && exportStatus?.cancellable !== false) cancelRequested = true;
+      return Promise.resolve({ ok: true });
+    }
     if (request.type === 'PING') {
       const nodes = window.ChatArchiveExtractor.nodes();
       const metadata = window.ChatArchiveExtractor.metadata();
@@ -563,7 +666,7 @@
     }
     if (request.type === 'COLLECT') return collectComplete(request.options);
     if (request.type === 'BEGIN_EXPORT') {
-      if (activeExport) return Promise.resolve({ ok: false, error: 'An export is already running.' });
+      if (activeExport || window.ChatArchiveHistory?.active) return Promise.resolve({ ok: false, error: 'An export is already running. Check the archive tab too.' });
       const job = request.job;
       if (!job || !['txt', 'md', 'html', 'json', 'pdf'].includes(job.format) || typeof job.filename !== 'string' || !job.options) {
         return Promise.resolve({ ok: false, error: 'The export settings are invalid.' });
@@ -572,4 +675,7 @@
       return Promise.resolve({ ok: true, exportStatus: { ...exportStatus } });
     }
   });
+  if (window.ChatArchivePanel) window.ChatArchivePanel.pageTheme = pageTheme;
+  window.ChatArchivePanel?.mount();
+  window.ChatArchivePanel?.theme(pageTheme());
 })();
