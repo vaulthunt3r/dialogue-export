@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Synthetic rich cards</title>
+<style>
+  body { margin:40px auto; padding:0 20px; max-width:768px; color:#202124; background:white; font:16px/1.6 system-ui,sans-serif; }
+  .card-list { display:flex; flex-direction:column; gap:20px; }
+  .card-row { display:flex; gap:12px; align-items:flex-start; }
+  .thumbnail { width:136px; flex-shrink:0; }
+  .thumbnail img { width:136px; height:102px; border-radius:16px; }
+  .card-text { display:flex; flex-direction:column; gap:4px; flex:1; min-width:0; }
+  .entity { font:600 16px/1.6 system-ui,sans-serif; color:inherit; padding:0; background:transparent; border:0; text-align:left; }
+  .badge { align-self:flex-start; color:#008847; background:#d8f3e3; padding:0 6px; border-radius:14px; font-size:13px; }
+  .caption { font-size:12px; color:#626262; }
+  .links { font-size:14px; } .links a { color:inherit; text-decoration:underline dotted; }
+  .divider { height:0; border:0; border-top:1px solid #eee; margin:0; }
+</style>
+<main>
+  <div data-chatgpt-selection-message-id="answer">
+    <p>A synthetic answer with thumbnails, labels and links.</p>
+    <h2>Browser examples</h2>
+    <div class="card-list">
+      <div class="card-row">
+        <div class="thumbnail"><img width="136" height="102" alt="First browser preview"></div>
+        <div class="card-text">
+          <button class="entity">Example browser</button>
+          <span class="badge">First choice</span>
+          <div>A description that should wrap beside the image and retain its normal paragraph layout.</div>
+          <span class="caption">Engine · Platform</span>
+          <span class="links"><a href="https://example.com/source">Source</a> · <a href="https://example.com/download">Download</a></span>
+        </div>
+      </div>
+      <hr class="divider">
+      <div class="card-row">
+        <div class="thumbnail"><img width="136" height="102" alt="Second browser preview"></div>
+        <div class="card-text">
+          <strong>Another browser</strong>
+          <div>A second card with text that continues below its heading. Text must remain selectable.</div>
+          <span class="caption">A different engine</span>
+          <span class="links"><a href="https://example.com/other">Source</a></span>
+        </div>
+      </div>
+    </div>
+    <p>End of the answer.</p>
+  </div>
+</main>

@@ -62,7 +62,10 @@ img { max-width: 100%; height: auto; }
   .compact-pagination .chat-archive-code pre { break-inside: auto; overflow: visible; orphans: 3; widows: 3; }
   a { color: inherit; text-decoration: none; }
 }
-/* Image origin and actual stored dimensions remain visible in saved PDFs. */
 .export-api-figure { margin: 14px 0; break-inside: avoid; }
-.export-api-figure figcaption { font-size: 12px; color: #596273; line-height: 1.5; }
 .export-api-figure .export-api-image { margin-bottom: 6px; }
+.chat-archive-card{display:grid;grid-template-columns:minmax(0,var(--export-card-width,136px)) minmax(0,1fr);align-items:start;gap:12px;max-width:100%;height:auto;overflow:visible}
+.chat-archive-card-image-right{grid-template-columns:minmax(0,1fr) minmax(0,var(--export-card-width,136px))}
+.chat-archive-card>*{min-width:0}
+.chat-archive-card figure{margin:0;min-width:0}
+.chat-archive-card img{display:block;width:100%;max-width:100%;height:auto;border-radius:var(--export-card-radius,0);aspect-ratio:var(--export-card-ratio,auto);object-fit:var(--export-card-fit,cover)}

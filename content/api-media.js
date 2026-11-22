@@ -3,6 +3,11 @@
   const maxOutputCharacters = 16 * 1024 * 1024;
   const maxImagePixels = 16 * 1024 * 1024;
   const maxTotalPixels = 24 * 1024 * 1024;
+  function imageFailure(code, message, details = {}) {
+    const error = new Error(message);
+    error.imageDiagnostic = { code, ...details };
+    return error;
+  }
   const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   function allowedUrl(value) {
     const url = new URL(value, location.origin);
@@ -112,14 +117,16 @@
     const abort = () => controller.abort();
     signal.addEventListener('abort', abort, { once: true });
     if (signal.aborted) controller.abort();
-    const timer = setTimeout(abort, 60000);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; abort(); }, 60000);
     let reader;
     try {
       check();
       const response = await fetch(url.href, { method: 'GET', credentials: local ? 'include' : 'omit', redirect: 'error',
         referrerPolicy: 'no-referrer', signal: controller.signal, headers: local && token ? { authorization: `Bearer ${token}` } : {} });
-      if (!response.ok || !response.body?.getReader) throw new Error('The image download is unavailable.');
-      if (Number(response.headers.get('content-length')) > maxImageBytes) { await response.body.cancel(); throw new Error('The image exceeds the download limit.'); }
+      if (!response.ok) throw imageFailure('IMAGE_HTTP_ERROR', 'The image server rejected the download.', { httpStatus: response.status });
+      if (!response.body?.getReader) throw imageFailure('IMAGE_BODY_UNAVAILABLE', 'The image response body is unavailable.');
+      if (Number(response.headers.get('content-length')) > maxImageBytes) { await response.body.cancel(); throw imageFailure('IMAGE_SIZE_LIMIT', 'The image exceeds the download limit.'); }
       reader = response.body.getReader();
       const chunks = []; let count = 0;
       for (;;) {
@@ -127,20 +134,40 @@
         const { value, done } = await reader.read();
         if (done) break;
         count += value.length;
-        if (count > maxImageBytes) throw new Error('The image exceeds the download limit.');
+        if (count > maxImageBytes) throw imageFailure('IMAGE_SIZE_LIMIT', 'The image exceeds the download limit.');
         chunks.push(value);
       }
       const bytes = new Uint8Array(count);
       let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
       return bytes;
+    } catch (error) {
+      if (timedOut) throw imageFailure('IMAGE_TIMEOUT', 'The image download timed out.');
+      throw error;
     } finally {
       await reader?.cancel().catch(() => {}); reader?.releaseLock();
       clearTimeout(timer); signal.removeEventListener('abort', abort); controller.abort();
     }
   }
 
-  async function embed(data, { resolvePointer, signal, token, check, onProgress, onPart, includeImageDetails = false }) {
+  async function loadImage(url, { signal, token = null, check = () => {} }) {
+    let bytes, image;
+    try { bytes = await download(url, { signal, token, check }); }
+    catch (error) {
+      if (error.imageDiagnostic) throw error;
+      throw imageFailure(signal.aborted ? 'IMAGE_ABORTED' : 'IMAGE_NETWORK_ERROR', 'The image request failed.');
+    }
+    try { image = inspect(bytes); }
+    catch (_) { throw imageFailure('IMAGE_FORMAT_UNSUPPORTED', 'The downloaded image format is unsupported or invalid.'); }
+    const area = image.width * image.height;
+    if (!Number.isFinite(area) || image.width <= 0 || image.height <= 0 || area > maxImagePixels) throw imageFailure('IMAGE_SIZE_LIMIT', 'The image pixel budget was exceeded.');
+    try { await validateDecode(image, signal); }
+    catch (_) { throw imageFailure(signal.aborted ? 'IMAGE_ABORTED' : 'IMAGE_DECODE_FAILED', 'Firefox could not decode the downloaded image.'); }
+    check();
+    return { width: image.width, height: image.height, type: image.type, src: dataUrl(image) };
+  }
+
+  async function embed(data, { resolvePointer, signal, token, check, onProgress, onPart }) {
     const cache = new Map();
     // Leave room for document wrappers and message labels below the background
     // 16 Mi-character ceiling. At most one part plus one message is prepared.
@@ -179,14 +206,7 @@
           if (!image) {
             try {
               const url = entry.source.pointer || reference.startsWith('sandbox:') ? await resolvePointer(reference, message.id) : reference;
-              image = inspect(await download(url, { signal, token, check }));
-              const area = image.width * image.height;
-              if (!Number.isFinite(area) || image.width <= 0 || image.height <= 0 || area > maxImagePixels) {
-                throw new Error('The image pixel budget was exceeded.');
-              }
-              await validateDecode(image, signal);
-              check();
-              image = { width: image.width, height: image.height, type: image.type, src: dataUrl(image) };
+              image = await loadImage(url, { signal, token, check });
             } catch (_) {
               check();
               throw new Error(`Image ${processed + 1} of ${total} could not be embedded (unavailable, unsupported, or over the image limit). No file was saved. Text export is still available.`);
@@ -196,10 +216,7 @@
           if ([...prepared.values()].reduce((sum, item) => sum + item.width * item.height, 0) > maxTotalPixels) {
             throw new Error('Images in one message exceed the pixel limit for a part. No file was saved.');
           }
-          const origin = message.role === 'user' ? 'User image' : 'Image from ChatGPT response';
-          const format = image.type === 'image/svg+xml' ? 'SVG' : image.type.slice(6).toUpperCase();
-          const caption = includeImageDetails ? `<figcaption>${origin} · ${image.width} × ${image.height} px · ${format}${format === 'SVG' ? ' · sanitized SVG' : ' · no re-encoding'} · original file not verified</figcaption>` : '';
-          const html = `<figure class="export-api-figure"><img class="export-api-image" src="${image.src}" alt="${escape(entry.alt || 'Image')}" width="${image.width}" height="${image.height}">${caption}</figure>`;
+          const html = `<figure class="export-api-figure"><img class="export-api-image" src="${image.src}" alt="${escape(entry.alt || 'Image')}" width="${image.width}" height="${image.height}"></figure>`;
           messageCharacters += html.length - entry.placeholder.length;
           if (messageCharacters > messageLimit) throw new Error('Images in one message exceed the single-part memory limit. No file was saved.');
           message.html = message.html.replace(entry.placeholder, html);
@@ -224,5 +241,5 @@
       return data;
     } finally { cache.clear(); }
   }
-  window.ChatArchiveApiMedia = { embed, inspect, allowedUrl };
+  window.ChatArchiveApiMedia = { embed, inspect, allowedUrl, loadImage };
 })();

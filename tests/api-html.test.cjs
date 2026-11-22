@@ -34,6 +34,28 @@ function fixture() {
 function options(format = 'html') { return { outputFormat: format, includeLinks: true }; }
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 
+test('image loader distinguishes HTTP, network, size, format and decoding failures without private details', async () => {
+  const cases = [
+    ['IMAGE_HTTP_ERROR', w => { w.fetch = async () => new Response('Private error page', { status: 403 }); }],
+    ['IMAGE_NETWORK_ERROR', w => { w.fetch = async () => { throw Error('https://private.invalid/?token=SECRET'); }; }],
+    ['IMAGE_SIZE_LIMIT', w => { w.fetch = async () => new Response(png, { headers: { 'content-length': String(9 * 1024 * 1024) } }); }],
+    ['IMAGE_FORMAT_UNSUPPORTED', w => { w.fetch = async () => new Response('not an image SECRET'); }],
+    ['IMAGE_DECODE_FAILED', w => { w.fetch = async () => new Response(png); w.Image = class { async decode() { throw Error('private decode details'); } }; }]
+  ];
+  for (const [code, setup] of cases) {
+    const f = fixture();
+    try {
+      setup(f.w);
+      await assert.rejects(f.w.ChatArchiveApiMedia.loadImage('https://images.openai.com/static-rsc-4/fixture', { signal: new f.w.AbortController().signal }), error => {
+        assert.equal(error.imageDiagnostic.code, code);
+        if (code === 'IMAGE_HTTP_ERROR') assert.equal(error.imageDiagnostic.httpStatus, 403);
+        assert.doesNotMatch(error.message + JSON.stringify(error.imageDiagnostic), /SECRET|private/);
+        return true;
+      });
+    } finally { f.close(); }
+  }
+});
+
 test('HTML/PDF normalizer renders headings, nested lists, tables, blockquotes and exact code', () => {
   const f = fixture();
   try {
@@ -62,6 +84,21 @@ test('conversation HTML cannot execute scripts, inject styles, events or javascr
     assert.equal(doc.querySelector('script,style,img,[onerror],[onmouseover]'), null);
     assert.ok([...doc.querySelectorAll('a')].every(a => a.href.startsWith('https:')));
     assert.match(doc.body.textContent, /<script>alert\(1\)<\/script>/);
+  } finally { f.close(); }
+});
+
+test('ChatGPT visual components request page collection instead of leaking their source into HTML/PDF', () => {
+  const f = fixture();
+  try {
+    const source = '## Browsers\n\n<box gap={3}>\n<row align="start" gap={3}>\n<AsyncImage query="browser screenshot" aspectRatio="4:3" maxWidth="136px"/>\n<box flex="1" gap={1}>\n**<Entity category="software" value="Example browser"/>**\n\n    <badge color="success">First choice</badge>\n\n    A description.\n</box>\n</row>\n</box>';
+    for (const format of ['html', 'pdf']) {
+      assert.throws(() => f.w.ChatArchiveApi.normalize(raw([source]), URL, options(format)), /rich content needs collection from the page/);
+      // Literal component examples remain code. They must not force a page scan.
+      for (const literal of ['```jsx\n' + source + '\n```', '~~~jsx\n' + source + '\n~~~', '`<AsyncImage query="example"/>`', '    <AsyncImage query="example"/>']) {
+        const result = f.w.ChatArchiveApi.normalize(raw([literal]), URL, options(format));
+        assert.ok(result.messages[0].html.includes('&lt;AsyncImage'));
+      }
+    }
   } finally { f.close(); }
 });
 
@@ -315,7 +352,7 @@ test('embedded images must decode successfully before a direct HTML result is re
   } finally { f.close(); }
 });
 
-test('more than 16 Mi characters of images split at message boundaries while preserving source bytes and origin labels', async () => {
+test('more than 16 Mi characters of images split while preserving bytes without legacy technical captions', async () => {
   const f = fixture();
   try {
     const bytes = Buffer.alloc(4 * 1024 * 1024); png.copy(bytes);
@@ -342,8 +379,7 @@ test('more than 16 Mi characters of images split at message boundaries while pre
     assert.deepEqual(parts.map(p => p.ids), [['u', 'g'], ['last']]);
     assert.ok(parts.every(p => p.size < 12 * 1024 * 1024));
     assert.ok(parts.reduce((sum, p) => sum + p.size, 0) > 16 * 1024 * 1024);
-    assert.match(parts[0].captions[0], /User image.*1 × 1 px.*PNG.*no re-encoding.*original file not verified/);
-    assert.match(parts[0].captions[1], /Image from ChatGPT response/);
+    assert.ok(parts.every(part => part.captions.length === 0));
     assert.equal(maximum, 1);
   } finally { f.close(); }
 });
@@ -366,7 +402,7 @@ test('staging failure stops without preparing subsequent messages or returning a
   } finally { f.close(); }
 });
 
-test('image source switches prevent excluded downloads and details are opt-in', async () => {
+test('image source switches prevent excluded downloads and stale details settings add no captions', async () => {
   for (const [includeUserImages, includeAssistantImages] of [[true, true], [true, false], [false, true], [false, false]]) {
     const f = fixture();
     try {
@@ -381,7 +417,7 @@ test('image source switches prevent excluded downloads and details are opt-in', 
         if (url.endsWith('/download')) return json({ download_url: url.replace('/download', '/image') });
         return new Response(png);
       };
-      const result = await f.w.ChatArchiveApi.collect({ ...options(), includeUserImages, includeAssistantImages }, () => {});
+      const result = await f.w.ChatArchiveApi.collect({ ...options(), includeUserImages, includeAssistantImages, includeImageDetails: true }, () => {});
       assert.ok(result.data, result.fallback);
       assert.equal(result.data.embeddedImages || 0, Number(includeUserImages) + Number(includeAssistantImages) * 2);
       assert.equal(calls.some(url => url.includes('user_image')), includeUserImages);

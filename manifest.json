@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Dialogue Export",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "Export ChatGPT and Gemini conversations to TXT, Markdown, HTML, JSON, or PDF.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -19,7 +19,8 @@
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "https://gemini.google.com/*"
+    "https://gemini.google.com/*",
+    "https://images.openai.com/*"
   ],
   "action": {
     "default_title": "Dialogue Export",
@@ -36,6 +37,7 @@
   "background": {
     "scripts": [
       "shared/timestamps.js",
+      "content/api-media.js",
       "shared/renderers.js",
       "shared/parts-store.js",
       "shared/zip.js",

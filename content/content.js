@@ -200,6 +200,7 @@
     while (Date.now() < finalDeadline) {
       await pause(250);
       const imageWait = await remember(options, true);
+      if (cachedPageResult(options)) return true;
       noChangeDeadline += imageWait;
       finalDeadline += imageWait;
       const signature = visibleStartSignature();
@@ -231,6 +232,7 @@
     for (let pass = 0; ; pass++) {
       const previousCount = messageCache.size;
       const changed = await triggerEarlierBatch(host, options);
+      if (cachedPageResult(options)) return;
       const added = messageCache.size - previousCount;
       unchangedCycles = added > 0 ? 0 : unchangedCycles + 1;
 
@@ -284,6 +286,20 @@
         exportStatus.collectionNotice = `${result.fallback} Page collection was used.`;
         exportStatus.sourceDiagnostic = result.sourceDiagnostic || null;
       }
+      if (result.pageMessages?.length) {
+        options = { ...options, pageMessages: result.pageMessages, includeSourceIds: true };
+        const extractor = window.ChatArchiveExtractor;
+        const mounted = extractor.nodes().map((node, index) => ({ sourceMessageId: extractor.sourceIdOf(node), role: extractor.roleOf(node, index) }));
+        if (matchesPageMessages(mounted, options.pageMessages)) {
+          await prepareImages(options);
+          const data = extractor.collect(options);
+          if (matchesPageMessages(data.messages, options.pageMessages)) {
+            onProgress(96, 'Rendered messages verified against the current conversation', data.messages.length, data.messages.length);
+            if (exportStatus) exportStatus.collectionNotice = 'Rendered page · message IDs and order verified · no scrolling';
+            return verifiedPageResult(data, options);
+          }
+        }
+      }
       onProgress(2, `${result.fallback} Reading the page instead.`);
     }
     if (options.selectedOnly) {
@@ -294,10 +310,32 @@
     }
 
     const host = scrollHost();
-    if (!host) { await prepareImages(options); return window.ChatArchiveExtractor.collect(options); }
+    if (!host) { await prepareImages(options); return verifiedPageResult(window.ChatArchiveExtractor.collect(options), options); }
     try {
-      return await collectFromHost(host, options, onProgress);
+      return verifiedPageResult(await collectFromHost(host, options, onProgress), options);
     } finally { host.restore(); }
+  }
+
+  function matchesPageMessages(messages, expected) {
+    return !!expected?.length && messages.length === expected.length && messages.every((message, index) =>
+      message.sourceMessageId === expected[index].id && message.role === expected[index].role);
+  }
+
+  function cachedPageResult(options) {
+    const messages = messageOrder.map(id => messageCache.get(id));
+    return matchesPageMessages(messages, options.pageMessages)
+      ? { ...window.ChatArchiveExtractor.metadata(), messages: messages.map((message, order) => ({ ...message, order })) } : null;
+  }
+
+  function verifiedPageResult(data, options) {
+    if (options.pageMessages) {
+      if (!matchesPageMessages(data.messages, options.pageMessages)) {
+        throw new Error('The rendered messages could not be matched to the complete current conversation. No file was saved. Reload the chat and retry.');
+      }
+      data.collectionMethod = 'chatgpt-page-verified';
+    }
+    data.messages.forEach(message => { delete message.sourceMessageId; });
+    return data;
   }
 
   async function collectFromHost(host, options, onProgress) {
@@ -306,10 +344,14 @@
     cachedCharacters = 0;
     forwardAnchor = null;
     await remember(options);
+    const mounted = cachedPageResult(options);
+    if (mounted) return mounted;
     let expected = cacheExpected();
     onProgress(2, 'Moving to the start', messageCache.size, expected);
 
     await loadConversationStart(host, options, onProgress);
+    const complete = cachedPageResult(options);
+    if (complete) return complete;
     await remember(options); // Anchor forward insertion before cached messages from the initial bottom window.
     expected = Math.max(expected, cacheExpected());
     onProgress(20, 'Collecting messages', messageCache.size, expected);
@@ -327,6 +369,8 @@
       host.scrollTop = Math.min(host.scrollTop + amount, host.scrollHeight);
       await pause(180);
       progressDeadline += await remember(options);
+      const complete = cachedPageResult(options);
+      if (complete) return complete;
       expected = Math.max(expected, cacheExpected());
       const maximum = Math.max(1, host.scrollHeight - host.clientHeight);
       onProgress(Math.min(96, 20 + Math.round((host.scrollTop / maximum) * 76)), 'Collecting conversation', messageCache.size, expected);
@@ -433,6 +477,21 @@
     dismiss.setAttribute('aria-label', state === 'running' ? 'Stop export' : 'Dismiss export status');
     // Handoff cannot be cancelled after the browser has received the file.
     dismiss.disabled = state === 'running' && (cancelRequested || percent >= 98);
+    view.querySelector('.chat-archive-image-access')?.remove();
+    if (state === 'error' && exportStatus?.mediaDiagnostic?.download?.code === 'IMAGE_PERMISSION_REQUIRED') {
+      const allow = document.createElement('button'); allow.type = 'button'; allow.className = 'chat-archive-image-access';
+      allow.textContent = '[ Allow image access ]';
+      allow.addEventListener('click', async () => {
+        allow.disabled = true;
+        try {
+          const result = await browser.runtime.sendMessage({ type: 'IMAGE_ACCESS_OPEN' });
+          if (!result?.ok) throw new Error('Could not open image permissions.');
+          allow.textContent = '[ Image settings opened ]';
+        } catch (_) { allow.textContent = '[ Retry image settings ]'; }
+        finally { allow.disabled = false; }
+      });
+      view.append(allow);
+    }
     view.querySelector('.chat-archive-image-diagnostic')?.remove();
     if (state === 'error' && exportStatus?.mediaDiagnostic) {
       const details = document.createElement('details'); details.className = 'chat-archive-image-diagnostic';

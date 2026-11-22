@@ -4,8 +4,10 @@
   let imageCache = new WeakMap();
   let decodedImages = new WeakMap();
   let resources = null;
+  const pendingImageReads = new Set();
   const limits = Object.freeze({ imageCharacters: 16 * 1024 * 1024, pixels: 24 * 1024 * 1024, assets: 128 });
   function resetResources(active = false) {
+    for (const pending of pendingImageReads) pending.cancel();
     imageCache = new WeakMap(); decodedImages = new WeakMap();
     resources = active ? { entries: new Map(), characters: 0, pixels: 0 } : null;
   }
@@ -161,6 +163,68 @@
     return !excludedRoots.some(root => root.contains(element)) && !decorativeImage(element) && availableMedia(element);
   }
 
+  async function preparePreviewImages(images, entries, check) {
+    for (const img of images) {
+      const src = img.currentSrc || img.getAttribute('src') || '';
+      let url;
+      try { url = new URL(src, location.href); } catch (_) { continue; }
+      if (location.hostname !== 'chatgpt.com' || url.origin !== 'https://images.openai.com' ||
+          !/^\/(?:static-rsc-\d+\/|thumbnails\/)/.test(url.pathname)) continue;
+      const key = `${src}:${img.naturalWidth}:${img.naturalHeight}`;
+      if (imageCache.get(img)?.key === key && imageCache.get(img)?.data) continue;
+      const id = crypto.randomUUID();
+      let interrupted = null, rejectWait;
+      const stopped = new Promise((_, reject) => { rejectWait = reject; });
+      const pending = { cancel(error = new Error('Image preparation interrupted.')) {
+        if (interrupted) return;
+        interrupted = error;
+        browser.runtime.sendMessage({ type: 'PAGE_IMAGE_CANCEL', id }).catch(() => {});
+        rejectWait(error);
+      } };
+      pendingImageReads.add(pending);
+      const monitor = setInterval(() => { try { check(); } catch (error) { pending.cancel(error); } }, 100);
+      try {
+        check();
+        const response = await Promise.race([browser.runtime.sendMessage({ type: 'PAGE_IMAGE_READ', id, url: url.href }).catch(() => ({ ok: false, code: 'IMAGE_RESPONSE_INVALID' })), stopped]);
+        check();
+        if (interrupted) throw interrupted;
+        const image = response?.image;
+        if (!response?.ok || typeof image?.src !== 'string' || !raster.test(image.src) || image.src.length > maxDataLength ||
+            !(image.width > 0 && image.height > 0 && image.width * image.height <= maxPixels)) {
+          const reasons = {
+            IMAGE_PERMISSION_REQUIRED: 'Firefox has not granted image access. Click Allow image access below, then retry.',
+            IMAGE_HTTP_ERROR: 'The image server rejected the download.',
+            IMAGE_NETWORK_ERROR: 'The image request was blocked or could not reach the server.',
+            IMAGE_TIMEOUT: 'The image download timed out.',
+            IMAGE_ABORTED: 'The image download was interrupted.',
+            IMAGE_SIZE_LIMIT: 'The preview exceeds the image size limit.',
+            IMAGE_FORMAT_UNSUPPORTED: 'The downloaded preview format is unsupported or invalid.',
+            IMAGE_DECODE_FAILED: 'Firefox could not decode the downloaded preview.',
+            IMAGE_BODY_UNAVAILABLE: 'Firefox could not read the image response.',
+            IMAGE_FETCH_BUSY: 'Another image download is still running. Wait briefly and retry.',
+            IMAGE_REQUEST_REJECTED: 'The image request was not accepted by the extension.',
+            IMAGE_FETCH_FAILED: 'The extension could not prepare the preview.',
+          };
+          const code = Object.hasOwn(reasons, response?.code) ? response.code : 'IMAGE_RESPONSE_INVALID';
+          const error = imageError(`A ChatGPT preview image could not be embedded. ${reasons[code] || 'Reload the extension and the chat, then retry.'} No file was saved.`, img, 'download');
+          error.mediaDiagnostic.version = 2;
+          error.mediaDiagnostic.download = { code };
+          const status = response?.diagnostic?.httpStatus;
+          if (code === 'IMAGE_HTTP_ERROR' && Number.isInteger(status) && status >= 100 && status <= 599) error.mediaDiagnostic.download.httpStatus = status;
+          throw error;
+        }
+        const now = img.currentSrc || img.getAttribute('src') || '';
+        if (`${now}:${img.naturalWidth}:${img.naturalHeight}` !== key || !img.isConnected) return false;
+        for (const { node, owner } of entries) {
+          const index = [...node.querySelectorAll('img')].indexOf(img);
+          if (index >= 0) reserve(owner, 'img', index, image.width * image.height, image.src.length);
+        }
+        imageCache.set(img, { key, data: image.src });
+      } finally { clearInterval(monitor); pendingImageReads.delete(pending); }
+    }
+    return true;
+  }
+
   async function waitForImages(getRoots, { timeoutMs = 60000, onProgress = () => {} } = {}) {
     const deadline = Date.now() + timeoutMs;
     const lazy = new Map();
@@ -222,7 +286,10 @@
           else decoding.push(state.promise);
         }
         const total = images.length + emptyTiles.length;
-        if (ready === total) return;
+        if (ready === total) {
+          if (await preparePreviewImages(images, entries, getRoots)) return;
+          continue;
+        }
         if (Date.now() >= deadline) throw imageError('Images did not finish loading within 60 seconds. Export was stopped to avoid missing images. Wait for the images in the chat and retry.', images.find(img => decodedImages.get(img)?.status !== 'ready'), 'timeout');
         const progress = `${ready}/${total}`;
         if (progress !== lastProgress) { onProgress(ready, total); lastProgress = progress; }
@@ -243,7 +310,7 @@
     resourceUsage: () => resources ? { assets: resources.entries.size, pixels: resources.pixels, imageCharacters: resources.characters } : { assets: 0, pixels: 0, imageCharacters: 0 },
     normalizeGalleries,
     waitForImages,
-    preserve(source, clone, { owner = 'unscoped', excludedRoots = [], includeImageDetails = false, role = 'assistant', provider = 'Assistant' } = {}) {
+    preserve(source, clone, { owner = 'unscoped', excludedRoots = [] } = {}) {
       const originals = [...source.querySelectorAll('img,svg,canvas')];
       const copies = [...clone.querySelectorAll('img,svg,canvas')];
       const indexes = { img: 0, svg: 0, canvas: 0 };
@@ -287,14 +354,6 @@
           figure.append(image);
           if (external) notice = 'Image is linked, not embedded; it may require the original site and a valid session.';
         } else notice = 'Visual content could not be embedded. Open the original conversation to view it.';
-        if (includeImageDetails && (data || external)) {
-          const detail = document.createElement('figcaption');
-          const width = element.naturalWidth || Number(element.getAttribute('width')) || 0;
-          const height = element.naturalHeight || Number(element.getAttribute('height')) || 0;
-          const encoding = external ? 'linked image' : svg ? 'sanitized SVG' : raster.test(element.currentSrc || element.getAttribute('src') || '') ? 'embedded source data' : 'page snapshot (PNG)';
-          detail.textContent = `${role === 'user' ? 'User image' : `Image from ${provider} response`}${width && height ? ` · ${width} × ${height} px` : ''} · ${encoding} · original file not verified`;
-          figure.append(detail);
-        }
         if (notice) {
           const caption = document.createElement('figcaption');
           caption.textContent = `${label}: ${notice}`;
@@ -311,4 +370,5 @@
       normalizeGalleries(clone);
     }
   };
+  window.addEventListener('pagehide', () => { for (const pending of pendingImageReads) pending.cancel(); });
 })();

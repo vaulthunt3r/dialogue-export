@@ -5,9 +5,10 @@
   const maxOutputCharacters = 16 * 1024 * 1024;
   const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
   class PageFallback extends Error {}
-  const fallback = (message, sourceDiagnostic) => {
+  const fallback = (message, sourceDiagnostic, renderedLayout = false) => {
     const error = new PageFallback(message);
     if (sourceDiagnostic) error.sourceDiagnostic = sourceDiagnostic;
+    error.renderedLayout = renderedLayout;
     throw error;
   };
 
@@ -199,6 +200,15 @@
       if (value !== null) references.set(ref.matched_text, value);
     }
     let source = chunks.join('\n');
+    // These are ChatGPT UI components, not HTML or ordinary Markdown. Their
+    // image queries cannot reconstruct the images actually shown on the page.
+    // Keep literal code examples intact; read rendered cards for visual exports.
+    if (rich && message.author?.role === 'assistant') mapProse(source, prose => {
+      if (/<(?:AsyncImage|Entity)\b[^>]*\/?\s*>|<(?:box|row|badge|text|divider)\s+(?:gap|align|flex|color|size)\s*=/i.test(prose)) {
+        fallback('This rich content needs collection from the page.', null, true);
+      }
+      return prose;
+    });
     source = mapProse(source, prose => prose.replace(/\uE200[^\uE201]*\uE201/g, token => {
       if (!references.has(token)) fallback('This rich content needs collection from the page.');
       return references.get(token);
@@ -316,7 +326,7 @@
     const url = location.href, id = conversationId(url);
     if (!id) return { fallback: 'This chat needs collection from the page.' };
     const controller = new AbortController();
-    let timedOut = false, interrupted = null, token = null;
+    let timedOut = false, interrupted = null, token = null, pageMessages = null;
     const check = () => {
       assertCurrent();
       if (location.href !== url) throw new Error('The conversation changed during export. No file was saved.');
@@ -342,7 +352,25 @@
       check();
       const nodes = window.ChatArchiveExtractor?.nodes() || [];
       const visibleIds = nodes.map(node => node.getAttribute('data-chatgpt-selection-message-id') || node.getAttribute('data-message-id')).filter(Boolean);
-      const data = normalize(raw, url, options, visibleIds);
+      let data;
+      try { data = normalize(raw, url, options, visibleIds); }
+      catch (error) {
+        if (error.renderedLayout) {
+          // Reuse the same branch/visibility/ID validation as direct text export.
+          // Only text-bearing conversations qualify: tool images or attachments
+          // may have different DOM grouping, so counts alone cannot prove them.
+          try {
+            const path = activePath(raw, id);
+            const simple = path.every(({ message: m }) => !m ||
+              !(m.content?.parts || []).some(part => typeof part !== 'string') &&
+              !(m.metadata?.attachments?.length) &&
+              !(m.metadata?.content_references || []).some(ref => ['image', 'images', 'image_v2'].includes(ref.type)));
+            if (simple) pageMessages = normalize(raw, url, { ...options, outputFormat: 'md' }, visibleIds)
+              .messages.map(({ id, role }) => ({ id, role }));
+          } catch (_) { /* No proof: keep the ordinary page-collection checks. */ }
+        }
+        throw error;
+      }
       if (['html', 'pdf'].includes(options.outputFormat)) {
         clearTimeout(timeout); // Media has its own bounded per-image deadline.
         const resolvePointer = async (pointer, messageId) => {
@@ -361,7 +389,7 @@
             return metadata.download_url;
           } finally { clearTimeout(deadline); }
         };
-        await window.ChatArchiveApiMedia.embed(data, { resolvePointer, signal: controller.signal, token, check, onProgress, onPart, includeImageDetails: options.includeImageDetails === true });
+        await window.ChatArchiveApiMedia.embed(data, { resolvePointer, signal: controller.signal, token, check, onProgress, onPart });
       }
       check();
       onProgress(96, 'Conversation loaded directly', data.multipart?.messages || data.messages.length);
@@ -370,7 +398,7 @@
       check();
       if (interrupted) throw interrupted;
       if (timedOut) return { fallback: 'Direct export timed out.' };
-      if (error instanceof PageFallback) return { fallback: error.message, sourceDiagnostic: error.sourceDiagnostic || null };
+      if (error instanceof PageFallback) return { fallback: error.message, sourceDiagnostic: error.sourceDiagnostic || null, pageMessages };
       throw error;
     } finally { token = null; clearTimeout(timeout); clearInterval(monitor); controller.abort(); }
   }

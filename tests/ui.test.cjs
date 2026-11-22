@@ -47,6 +47,23 @@ async function popup(config={}) {
   return {...env,model,$,radio};
 }
 
+test('image access page requests only its declared origin on click and does not restart exports', async () => {
+  for (const granted of [false, true]) {
+    const env = environment(read('popup/image-access.html'), 'https://fixture.invalid/image-access.html');
+    try {
+      const calls = [];
+      env.w.browser = { permissions: { contains: async () => false, request: async args => { calls.push(copy(args)); return granted; } } };
+      env.w.eval(read('popup/image-access.js'));
+      await env.clock.tickAsync(0);
+      assert.equal(calls.length, 0);
+      env.w.document.getElementById('enable').click(); await env.clock.tickAsync(0);
+      assert.deepEqual(calls, [{ origins: ['https://images.openai.com/*'] }]);
+      assert.equal(env.w.document.getElementById('enable').hidden, granted);
+      assert.match(env.w.document.getElementById('result').textContent, granted ? /Return to your chat and retry/ : /remains off/);
+    } finally { env.close(); }
+  }
+});
+
 test('popup keeps export disabled until the first connection completes',async()=>{
   let resolvePing;
   const p=await popup({handle:req=>req.type==='PING'?new Promise(resolve=>{resolvePing=resolve;}):undefined});
@@ -220,6 +237,21 @@ function content() {
   return {...env,sent,send:req=>listener(req),result:value=>{readyResult=value;},nodes:()=>w.document.querySelectorAll('[data-message-author-role]')};
 }
 const job={format:'md',filename:'example.md',options:{selectedOnly:true,includeTitle:true,includeLinks:true}};
+test('image permission failure offers a repair button; other download failures do not', async () => {
+  for (const code of ['IMAGE_PERMISSION_REQUIRED', 'IMAGE_NETWORK_ERROR']) {
+    const c = content();
+    try {
+      c.w.ChatArchiveApi = { eligible: () => true, collect: async () => {
+        const error = new Error('Preview unavailable'); error.mediaDiagnostic = { version: 2, phase: 'download', download: { code } }; throw error;
+      } };
+      await c.send({ type: 'BEGIN_EXPORT', job: { ...job, format: 'html' } }); await c.clock.tickAsync(10);
+      const button = c.w.document.querySelector('.chat-archive-image-access');
+      assert.equal(!!button, code === 'IMAGE_PERMISSION_REQUIRED');
+      assert.equal(c.sent.some(r => r.type === 'EXPORT_READY'), false);
+      if (button) { button.click(); await c.clock.tickAsync(10); assert.equal(c.sent.filter(r => r.type === 'IMAGE_ACCESS_OPEN').length, 1); }
+    } finally { c.close(); }
+  }
+});
 test('page picker updates count and accessibility, clear and Escape work without leaking controls into exports',async()=>{
   const c=content();await c.send({type:'SET_PICKING',enabled:true});await c.clock.tickAsync(10);
   c.w.document.querySelector('.chat-archive-picker').click();await c.clock.tickAsync(10);
@@ -319,23 +351,23 @@ test('All still collects the entire already-loaded fixture through the unchanged
   assert.equal((await c.send({type:'PING'})).exportStatus.state,'done');c.close();
 });
 
-test('image switches default on, details default off, persist separately and apply only to HTML/PDF',async()=>{
-  const p=await popup();
+test('image switches persist for HTML/PDF and the removed details preference is ignored',async()=>{
+  const p=await popup({saved:{includeImageDetails:true}});
   try {
     await p.clock.tickAsync(10);
     assert.equal(p.$('includeUserImages').checked,true);assert.equal(p.$('includeAssistantImages').checked,true);
-    assert.equal(p.$('includeImageDetails').checked,false);assert.equal(p.$('imageOptions').hidden,true);
+    assert.equal(p.$('includeImageDetails'),null);assert.equal(p.$('imageOptions').hidden,true);
     p.radio('format','html');assert.equal(p.$('imageOptions').hidden,false);
-    p.$('includeUserImages').click();p.$('includeImageDetails').click();await p.clock.tickAsync(10);
-    assert.equal(p.model.saved.includeUserImages,false);assert.equal(p.model.saved.includeAssistantImages,true);assert.equal(p.model.saved.includeImageDetails,true);
+    p.$('includeUserImages').click();await p.clock.tickAsync(10);
+    assert.equal(p.model.saved.includeUserImages,false);assert.equal(p.model.saved.includeAssistantImages,true);
     p.$('exportButton').click();await p.clock.tickAsync(10);
     const options=p.model.calls.find(r=>r.type==='BEGIN_EXPORT').job.options;
-    assert.equal(options.includeUserImages,false);assert.equal(options.includeAssistantImages,true);assert.equal(options.includeImageDetails,true);
+    assert.equal(options.includeUserImages,false);assert.equal(options.includeAssistantImages,true);assert.equal(options.includeImageDetails,undefined);
   } finally {p.close();}
   const q=await popup({saved:{format:'md',includeUserImages:false,includeAssistantImages:false,includeImageDetails:true}});
   try {await q.clock.tickAsync(10);q.$('exportButton').click();await q.clock.tickAsync(10);
     const options=q.model.calls.find(r=>r.type==='BEGIN_EXPORT').job.options;
-    assert.equal(options.includeUserImages,true);assert.equal(options.includeAssistantImages,true);assert.equal(options.includeImageDetails,false);
+    assert.equal(options.includeUserImages,true);assert.equal(options.includeAssistantImages,true);assert.equal(options.includeImageDetails,undefined);
   } finally {q.close();}
 });
 
@@ -376,7 +408,7 @@ test('page fallback applies image choices before decoding/capture and preserves 
       assert.equal(ready.data.messages.length,2);
       assert.equal(ready.data.messages[0].html.includes('<img'),includeUserImages);
       assert.equal(ready.data.messages[1].html.includes('<img'),!includeUserImages);
-      assert.match(ready.data.messages[includeUserImages?0:1].html,/original file not verified/);
+      assert.doesNotMatch(ready.data.messages[includeUserImages?0:1].html,/figcaption|original file not verified|Image from ChatGPT response/);
     } finally {c.close();}
   }
 });

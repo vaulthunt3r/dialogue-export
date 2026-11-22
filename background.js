@@ -5,6 +5,7 @@ const maxRetainedCharacters = 32 * 1024 * 1024;
 let retainedCharacters = 0;
 let preparingFile = false;
 const partDownloads = new Map();
+const pageImageRequests = new Map();
 const ownerOf = sender => `${sender.tab?.id ?? 'extension'}:${sender.frameId || 0}`;
 const dataSize = data => data.messages.reduce((sum, message) => sum + ['id', 'text', 'markdown', 'html'].reduce((n, key) => n + (message[key]?.length || 0), 0), 0);
 
@@ -82,6 +83,7 @@ async function waitForDownload(id, signal) {
 
 globalThis.ChatArchiveParts?.cleanup().catch(() => {});
 browser.tabs.onRemoved?.addListener(async tabId => {
+  for (const pending of pageImageRequests.values()) if (pending.tabId === tabId) pending.controller.abort();
   if (!globalThis.ChatArchiveParts) return;
   try {
     for (const entry of await ChatArchiveParts.allJobs()) {
@@ -110,6 +112,45 @@ browser.downloads.onChanged.addListener(delta => {
 });
 
 browser.runtime.onMessage.addListener(async (request, sender = {}) => {
+  if (['PAGE_IMAGE_READ', 'PAGE_IMAGE_CANCEL', 'IMAGE_ACCESS_OPEN'].includes(request.type)) {
+    // Only the top-level ChatGPT content script can fetch already-referenced
+    // preview images. No general proxy, credentials, redirects or arbitrary host.
+    let page, image;
+    try { page = new URL(sender.url); } catch (_) { return { ok: false, code: 'IMAGE_REQUEST_REJECTED' }; }
+    if (page.origin !== 'https://chatgpt.com' || !Number.isInteger(sender.tab?.id) || (sender.frameId || 0) !== 0) return { ok: false, code: 'IMAGE_REQUEST_REJECTED' };
+    if (request.type === 'IMAGE_ACCESS_OPEN') {
+      await browser.tabs.create({ url: browser.runtime.getURL('popup/image-access.html') });
+      return { ok: true };
+    }
+    if (typeof request.id !== 'string' || !/^[\w-]{1,80}$/.test(request.id)) return { ok: false, code: 'IMAGE_REQUEST_REJECTED' };
+    const owner = ownerOf(sender);
+    if (request.type === 'PAGE_IMAGE_CANCEL') {
+      const pending = pageImageRequests.get(owner);
+      if (pending?.id === request.id) pending.controller.abort();
+      return { ok: true };
+    }
+    try { image = new URL(request.url); } catch (_) { return { ok: false, code: 'IMAGE_REQUEST_REJECTED' }; }
+    if (typeof request.url !== 'string' || request.url.length > 8192 || image.origin !== 'https://images.openai.com' ||
+        image.username || image.password || !/^\/(?:static-rsc-\d+\/|thumbnails\/)/.test(image.pathname)) return { ok: false, code: 'IMAGE_REQUEST_REJECTED' };
+    if (pageImageRequests.has(owner) || pageImageRequests.size >= 2) return { ok: false, code: 'IMAGE_FETCH_BUSY' };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 70000);
+    pageImageRequests.set(owner, { id: request.id, tabId: sender.tab.id, controller });
+    try {
+      if (!await browser.permissions.contains({ origins: ['https://images.openai.com/*'] })) return { ok: false, code: 'IMAGE_PERMISSION_REQUIRED' };
+      const result = await ChatArchiveApiMedia.loadImage(image.href, { signal: controller.signal,
+        check() { if (controller.signal.aborted) throw new Error('Image preparation interrupted.'); } });
+      return { ok: true, image: result };
+    } catch (error) {
+      const allowed = ['IMAGE_HTTP_ERROR', 'IMAGE_BODY_UNAVAILABLE', 'IMAGE_SIZE_LIMIT', 'IMAGE_TIMEOUT', 'IMAGE_ABORTED', 'IMAGE_NETWORK_ERROR', 'IMAGE_FORMAT_UNSUPPORTED', 'IMAGE_DECODE_FAILED'];
+      const code = allowed.includes(error.imageDiagnostic?.code) ? error.imageDiagnostic.code : controller.signal.aborted ? 'IMAGE_ABORTED' : 'IMAGE_FETCH_FAILED';
+      const diagnostic = { code };
+      const status = error.imageDiagnostic?.httpStatus;
+      if (code === 'IMAGE_HTTP_ERROR' && Number.isInteger(status) && status >= 100 && status <= 599) diagnostic.httpStatus = status;
+      return { ok: false, code, diagnostic };
+    }
+    finally { clearTimeout(timer); pageImageRequests.delete(owner); }
+  }
   if (request.type?.startsWith('ARCHIVE_')) return ChatArchiveBulk.handle(request, sender, {
     acquire() { if (preparingFile) return false; preparingFile = true; return true; },
     release() { preparingFile = false; }, waitForDownload

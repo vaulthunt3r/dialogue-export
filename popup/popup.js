@@ -76,7 +76,7 @@ function filename() {
 }
 function preferences() {
   return { scope, format, includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, includeActivity: $('includeActivity').checked, includeTimestamps: $('includeTimestamps').checked, appendDate: $('appendDate').checked, compactPagination: $('compactPagination').checked,
-    includeUserImages: $('includeUserImages').checked, includeAssistantImages: $('includeAssistantImages').checked, includeImageDetails: $('includeImageDetails').checked,
+    includeUserImages: $('includeUserImages').checked, includeAssistantImages: $('includeAssistantImages').checked,
     notifyOnCompletion: $('notifyOnCompletion').checked };
 }
 function savePreferences() {
@@ -98,7 +98,6 @@ function render() {
   const selected = scope === 'selected';
   $('compactPaginationOption').hidden = !['html', 'pdf'].includes(format);
   $('imageOptions').hidden = !['html', 'pdf'].includes(format);
-  $('includeImageDetails').disabled = !$('includeUserImages').checked && !$('includeAssistantImages').checked;
   document.body.dataset.state = ready && !running ? 'ready' : state;
   // The ZIP chooser remains available on an empty ChatGPT chat too.
   const emptyChat = state === 'disconnected' && info?.provider === 'ChatGPT' && info.count === 0;
@@ -149,7 +148,7 @@ async function connect() {
         notificationPermission = result.notifications === true;
         return [{ id: result.tabId }];
       }) : browser.tabs.query({ active: true, currentWindow: true }), 3000, 'Firefox did not return the active tab.'),
-      initialized ? Promise.resolve(null) : withTimeout(browser.storage.local.get(['scope', 'format', 'includeTitle', 'includeLinks', 'includeTimestamps', 'includeActivity', 'appendDate', 'compactPagination', 'includeUserImages', 'includeAssistantImages', 'includeImageDetails', 'notifyOnCompletion']), 2500, 'Preferences unavailable').catch(() => ({}))
+      initialized ? Promise.resolve(null) : withTimeout(browser.storage.local.get(['scope', 'format', 'includeTitle', 'includeLinks', 'includeTimestamps', 'includeActivity', 'appendDate', 'compactPagination', 'includeUserImages', 'includeAssistantImages', 'notifyOnCompletion']), 2500, 'Preferences unavailable').catch(() => ({}))
     ]);
     if (attempt !== sequence) return;
     const tab = tabs[0];
@@ -165,7 +164,6 @@ async function connect() {
       $('includeActivity').checked = saved.includeActivity === true;
       $('includeUserImages').checked = saved.includeUserImages !== false;
       $('includeAssistantImages').checked = saved.includeAssistantImages !== false;
-      $('includeImageDetails').checked = saved.includeImageDetails === true;
       if (!inPanel) notificationPermission = !!(await browser.permissions?.contains({ permissions: ['notifications'] }).catch(() => false));
       $('notifyOnCompletion').checked = saved.notifyOnCompletion === true && notificationPermission;
       initialized = true;
@@ -238,7 +236,7 @@ async function chooseScope(next) {
 }
 document.querySelectorAll('[name="scope"]').forEach(input => input.addEventListener('change', () => chooseScope(input.value)));
 document.querySelectorAll('[name="format"]').forEach(input => input.addEventListener('change', () => { format = input.value; error(); savePreferences(); render(); }));
-['includeTitle', 'includeLinks', 'includeTimestamps', 'includeActivity', 'appendDate', 'compactPagination', 'includeUserImages', 'includeAssistantImages', 'includeImageDetails'].forEach(id => $(id).addEventListener('change', () => { savePreferences(); render(); }));
+['includeTitle', 'includeLinks', 'includeTimestamps', 'includeActivity', 'appendDate', 'compactPagination', 'includeUserImages', 'includeAssistantImages'].forEach(id => $(id).addEventListener('change', () => { savePreferences(); render(); }));
 $('notifyOnCompletion').addEventListener('change', async () => {
   error();
   if ($('notifyOnCompletion').checked) {
@@ -295,7 +293,6 @@ $('exportForm').addEventListener('submit', async event => {
   try {
     const result = await send({ type: 'BEGIN_EXPORT', job: { format, filename: filename(), options: { selectedOnly: scope === 'selected', includeTitle: $('includeTitle').checked, includeLinks: $('includeLinks').checked, includeActivity: $('includeActivity').checked && info.provider === 'ChatGPT', includeTimestamps: $('includeTimestamps').checked && info.provider === 'ChatGPT', compactPagination: ['html', 'pdf'].includes(format) && $('compactPagination').checked,
       includeUserImages: !['html', 'pdf'].includes(format) || $('includeUserImages').checked, includeAssistantImages: !['html', 'pdf'].includes(format) || $('includeAssistantImages').checked,
-      includeImageDetails: ['html', 'pdf'].includes(format) && $('includeImageDetails').checked,
       notifyOnCompletion: $('notifyOnCompletion').checked } } });
     if (!result?.ok) throw new Error(result?.error || 'The export could not start.');
     info.activeExport = true;

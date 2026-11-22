@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.7 — 2026-11-22
+
+- Remove generated image source/size/quality captions and their settings control from all new HTML/PDF exports, including multipart and page collection. Previously saved `includeImageDetails` preferences are ignored; original conversation captions remain content.
+- Detect ChatGPT visual-component source such as `AsyncImage`, `Entity`, and layout containers in HTML/PDF direct exports and collect the rendered page instead. Literal code examples remain code. Image queries are never treated as downloadable image URLs.
+- Preserve portable thumbnail-and-text card rows in page-based HTML/PDF exports, including typography, badges, links, thumbnail proportions and passive entity labels. Keep responsive layout without importing page stylesheets, fixed positioning or CSS resource URLs.
+- Avoid scrolling for rendered cards when all mounted messages match the current API branch by ordered message IDs and roles. Recheck after image loading; missing, duplicated, reordered or changed messages cannot pass as a complete verified export.
+- Embed supported OpenAI CDN previews through a bounded background download when canvas access is blocked. Add the narrow `images.openai.com` host permission; omit cookies, tokens and referrers and preserve downloaded preview bytes without re-encoding. Stop with an explanation if this preview download fails.
+- Preserve original-to-clone image pairing when cards contain hidden icons; remove hidden elements only after media matching.
+- Check image-host permission explicitly and offer an Allow image access action only when missing. Distinguish missing permission, HTTP refusal, network failure, size/format problems and decoding failures with privacy-safe codes instead of blaming all failures on site access.
+- Validation: 219 automated tests pass; isolated Firefox 160.0.1 checks cover rendered cards, offline embedded previews, image permissions, HTML/print layout and verified collection without scrolling. The maintainer confirmed the affected HTML export looks correct with test 4 on November 22. This is not a pixel-exact copy of every ChatGPT component. Page collection may scroll and retains its existing media/memory limits; the fast direct path remains unchanged for supported ordinary Markdown.
+
 ## 0.5.6 — 2026-11-17
 
 - Add direct saved-ChatGPT export for TXT/Markdown/HTML/PDF with conversation and current-branch validation, no scrolling when supported, and explicit page fallback for unsupported variants.

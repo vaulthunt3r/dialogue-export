@@ -4,7 +4,9 @@
 
 A Firefox extension for exporting a conversation to **TXT, Markdown, HTML, JSON or PDF**, and saving multiple ChatGPT conversations in a **ZIP archive**. Compact monochrome controls, readable output and local processing.
 
-**[Install 0.5.6 — Mozilla-signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-v0.5.6-signed.xpi)** · [All release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.6) · [What's new](docs/RELEASE-v0.5.6.md)
+**[Install 0.5.7 — Mozilla-signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.7/Dialogue-Export-v0.5.7-signed.xpi)** · [All release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.7) · [What's new](docs/RELEASE-v0.5.7.md)
+
+**New in 0.5.7:** supported ChatGPT thumbnail cards keep their rendered layout in HTML/PDF, OpenAI previews can be embedded offline, and exports no longer add technical image captions. [Changes and the causes of the previous rendering problems](docs/RELEASE-v0.5.7.md).
 
 ## See it in a minute
 
@@ -12,7 +14,7 @@ https://github.com/user-attachments/assets/c4a84b92-d3b3-4237-879a-082efc998ac2
 
 **[Watch the 60-second tour](https://github.com/user-attachments/assets/c4a84b92-d3b3-4237-879a-082efc998ac2)** · [Download MP4](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-0.5.6-trailer-EN.mp4)
 
-English titles and original music. The tour uses fictional conversations and demonstration data.
+English titles and original music. This 0.5.6 feature tour uses fictional conversations and demonstration data; its image-details setting was removed in 0.5.7.
 
 ## What you can save
 
@@ -35,7 +37,9 @@ During user testing, a conversation containing **over 35,000 Markdown lines** ex
 
 ### Images and printable documents
 
-Choose whether to include user images, AI-response images and source/size/quality details. Downloaded raster bytes are not re-encoded, but an available image may be a preview: equivalence to ChatGPT's **Download** original is not guaranteed.
+Choose whether to include user images and AI-response images. Images are exported without added technical captions. Downloaded raster bytes are not re-encoded, but an available image may be a preview: equivalence to ChatGPT's **Download** original is not guaranteed.
+
+Supported ChatGPT thumbnail cards retain their layout, badges and links in HTML/PDF through rendered-page collection. This can avoid scrolling when every mounted message matches the complete current conversation branch. If an OpenAI preview needs image-host permission, use **Allow image access**, then retry the export. Interactive widgets and every page style are not reproduced exactly.
 
 Large direct HTML/PDF exports can split into numbered parts. HTML parts download sequentially. PDF opens a print page; select **Save as PDF** and print each part separately. **Compact PDF pagination** removes message boxes in print so text can flow across pages with fewer large gaps. It does not change the on-screen HTML layout.
 
@@ -47,7 +51,7 @@ Unsupported chats are skipped while the others continue. If a later read error s
 
 ## Install and start
 
-1. Download the [signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-v0.5.6-signed.xpi), open it in **Firefox 142 or later** and confirm installation.
+1. Download the [signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.7/Dialogue-Export-v0.5.7-signed.xpi), open it in **Firefox 142 or later** and confirm installation.
 2. Open or reload a ChatGPT conversation. Click the dialogue icon in the page margin or on the Firefox toolbar.
 3. Choose your messages and format, review **Export options**, then press **Export** or **Prepare PDF**. Keep the source tab open until collection finishes.
 
@@ -76,7 +80,7 @@ Processing takes place in Firefox. There are no developer uploads, analytics or 
 
 ## Development and acknowledgments
 
-From the source archive, run `npm ci --ignore-scripts` and `npm test`. Runtime files are readable JavaScript plus a pinned local Markdown parser. [Reproduction and packaging instructions](docs/AMO_SUBMISSION-v0.5.6.md) document the submitted package; the [release notes](docs/RELEASE-v0.5.6.md) link the validation evidence. For a temporary Firefox installation, extract the runtime ZIP and load its `manifest.json` through `about:debugging#/runtime/this-firefox`.
+From the source archive, run `npm ci --ignore-scripts` and `npm test`. Runtime files are readable JavaScript plus a pinned local Markdown parser. [Reproduction and packaging instructions](docs/AMO_SUBMISSION-v0.5.7.md) document the submitted package; the [release notes](docs/RELEASE-v0.5.7.md) summarize validation. For a temporary Firefox installation, extract the runtime ZIP and load its `manifest.json` through `about:debugging#/runtime/this-firefox`.
 
 The direct-reading approach was inspired by **[John2022 / ChatGPT Conversation Export](https://github.com/John2022/chatgpt-conversation-export)**. Thank you for demonstrating the benefit of retrieving conversation data directly. Dialogue Export combines direct reading with its existing page collector, validation, output formats and archive workflow. [markdown-it](https://github.com/markdown-it/markdown-it) handles Markdown rendering locally; dependency and icon notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

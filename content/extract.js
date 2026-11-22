@@ -5,7 +5,7 @@
   const turnSelector = '[data-turn-key], article[data-testid^="conversation-turn-"]';
   let imageMessages = new WeakSet();
   const maxPayloadCharacters = 16 * 1024 * 1024;
-  const payloadSize = item => ['id', 'text', 'markdown', 'html'].reduce((sum, key) => sum + (item[key]?.length || 0), 0) +
+  const payloadSize = item => ['id', 'sourceMessageId', 'text', 'markdown', 'html'].reduce((sum, key) => sum + (item[key]?.length || 0), 0) +
     (item.activities || []).reduce((sum, activity) => sum + ['title', 'text', 'markdown', 'html'].reduce((n, key) => n + (activity[key]?.length || 0), 0), 0);
 
   function activityRoots(scope = document, cleaned = false) {
@@ -190,6 +190,24 @@
     return turn?.getAttribute('data-testid') || node.dataset.chatArchiveId || `message-${index + 1}`;
   }
 
+  function sourceIdOf(node) {
+    const attributes = ['data-message-id', 'data-chatgpt-selection-message-id'];
+    const direct = [node, ...node.querySelectorAll('[data-message-id], [data-chatgpt-selection-message-id]')];
+    const ids = new Set(direct.flatMap(element => attributes.map(name => element.getAttribute(name)?.trim()).filter(Boolean)));
+    if (ids.size) return ids.size === 1 ? [...ids][0] : null;
+    const turn = node.closest(turnSelector);
+    for (let parent = node, depth = 0; parent && depth < 8; parent = parent.parentElement, depth++) {
+      const value = parent.getAttribute('data-chatgpt-search-message-ids')?.trim();
+      if (value) {
+        if (!value.startsWith('[')) return value;
+        try { const parsed = JSON.parse(value); return Array.isArray(parsed) && parsed.length === 1 && typeof parsed[0] === 'string' ? parsed[0] : null; }
+        catch (_) { return null; }
+      }
+      if (parent === turn || parent.matches('main, [role="main"]')) break;
+    }
+    return null;
+  }
+
   function textWithLinks(source, markdown = false) {
     const clone = source.cloneNode(true);
     if (markdown) {
@@ -233,13 +251,77 @@
     return (clone.innerText || clone.textContent || '').trim();
   }
 
-  function cleanClone(node, includeLinks, includeMedia = true, mediaOwner, imageOptions = {}) {
+  function preserveCardLayouts(sourceElements, cloneElements) {
+    // Copy a small, inert presentation subset for thumbnail + text rows. Never
+    // carry page stylesheets, positioning, clipping or external CSS resources.
+    const properties = ('color background-color font-family font-size font-weight font-style line-height letter-spacing text-align ' +
+      'text-decoration-line text-decoration-style text-decoration-color border-radius ' +
+      'padding-top padding-right padding-bottom padding-left margin-top margin-right margin-bottom margin-left ' +
+      'row-gap column-gap flex-direction flex-wrap align-items align-self justify-content').split(' ')
+      .concat(['top', 'right', 'bottom', 'left'].flatMap(side => ['width', 'style', 'color'].map(kind => `border-${side}-${kind}`)));
+    const safe = value => value && !/[<>]|url\s*\(|var\s*\(|attr\s*\(|expression\s*\(|javascript:/i.test(value);
+    const copies = new Map(sourceElements.map((element, index) => [element, cloneElements[index]]));
+    for (const row of sourceElements) {
+      if (row.children.length !== 2 || row.closest('pre, code, [class~="group/generated-image-gallery-controls"]')) continue;
+      const style = getComputedStyle(row);
+      if (!['flex', 'inline-flex', 'grid', 'inline-grid'].includes(style.display) ||
+          (style.display.includes('flex') && style.flexDirection && style.flexDirection !== 'row')) continue;
+      const children = [...row.children];
+      const imageIndex = children.findIndex(child => !child.textContent.trim() && (child.matches('img') || child.querySelector('img')));
+      if (imageIndex < 0 || !children[1 - imageIndex].textContent.trim()) continue;
+      const img = children[imageIndex].matches('img') ? children[imageIndex] : children[imageIndex].querySelector('img');
+      const imageStyle = getComputedStyle(img);
+      const width = img.getBoundingClientRect().width || parseFloat(imageStyle.width) || Number(img.getAttribute('width'));
+      if (!(width > 48 && width <= 240)) continue;
+      const copy = copies.get(row);
+      if (!copy) continue;
+      const group = row.parentElement, groupStyle = group && getComputedStyle(group);
+      const groupElements = groupStyle?.display === 'flex' && groupStyle.flexDirection === 'column'
+        ? [group, ...[...group.children].filter(child => child.tagName === 'HR')] : [];
+      for (const element of [...groupElements, row, ...row.querySelectorAll('*')]) {
+        const target = copies.get(element);
+        if (!target) continue;
+        const computed = getComputedStyle(element);
+        target.removeAttribute('style');
+        // Media capture still pairs originals and clones by position. Defer
+        // removals until that pairing is complete, including hidden SVG icons.
+        if (computed.display === 'none' || ['hidden', 'collapse'].includes(computed.visibility)) {
+          target.setAttribute('data-export-hidden', ''); target.style.display = 'none'; continue;
+        }
+        for (const property of properties) {
+          const value = computed.getPropertyValue(property);
+          if (safe(value)) target.style.setProperty(property, value);
+        }
+        if (['flex', 'inline-flex', 'block', 'inline', 'inline-block'].includes(computed.display)) target.style.display = computed.display;
+      }
+      copy.classList.add('chat-archive-card');
+      if (imageIndex === 1) copy.classList.add('chat-archive-card-image-right');
+      copy.style.removeProperty('display');
+      if (!style.columnGap || style.columnGap === 'normal') copy.style.columnGap = '12px';
+      copy.style.setProperty('--export-card-width', `${width}px`);
+      if (safe(imageStyle.borderRadius)) copy.style.setProperty('--export-card-radius', imageStyle.borderRadius);
+      const height = img.getBoundingClientRect().height || parseFloat(imageStyle.height) || Number(img.getAttribute('height'));
+      if (height > 0) copy.style.setProperty('--export-card-ratio', `${width} / ${height}`);
+      if (['contain', 'cover', 'fill', 'none', 'scale-down'].includes(imageStyle.objectFit)) copy.style.setProperty('--export-card-fit', imageStyle.objectFit);
+      // Preserve contrast even when the live page uses a dark theme.
+      for (let parent = row; parent; parent = parent.parentElement) {
+        const background = getComputedStyle(parent).backgroundColor;
+        if (background && background !== 'transparent' && background !== 'rgba(0, 0, 0, 0)' && safe(background)) {
+          copy.style.backgroundColor = background; break;
+        }
+      }
+    }
+  }
+
+  function cleanClone(node, includeLinks, includeMedia = true, mediaOwner, preserveLayout = false) {
     const source = contentRoot(node);
     if (source.textContent.length > maxPayloadCharacters) throw new Error('This export exceeds the text memory limit. Export fewer selected messages. No partial file was saved.');
     const clone = source.cloneNode(true);
     const sourceElements = [...source.querySelectorAll('*')];
     const cloneElements = [...clone.querySelectorAll('*')];
-    if (includeMedia) window.ChatArchiveMedia?.preserve(source, clone, { owner: mediaOwner, excludedRoots: mediaExclusions(source), ...imageOptions });
+    if (preserveLayout) preserveCardLayouts([source, ...sourceElements], [clone, ...cloneElements]);
+    if (includeMedia) window.ChatArchiveMedia?.preserve(source, clone, { owner: mediaOwner, excludedRoots: mediaExclusions(source) });
+    clone.querySelectorAll('[data-export-hidden]').forEach(element => element.remove());
 
     const sourceTextareas = [...source.querySelectorAll('textarea')];
     [...clone.querySelectorAll('textarea')].forEach((textarea, index) => {
@@ -306,6 +388,13 @@
       target.replaceWith(block);
     });
 
+    clone.querySelectorAll('.chat-archive-card button').forEach(button => {
+      if (!button.textContent.trim()) return;
+      const label = document.createElement('span');
+      label.className = button.className;
+      label.style.cssText = button.style.cssText;
+      label.append(...button.childNodes); button.replaceWith(label);
+    });
     clone.querySelectorAll('button, svg, canvas, nav, script, style, link, meta, object, embed, .chat-archive-picker').forEach(el => el.remove());
     clone.querySelectorAll('*').forEach(element => {
       [...element.attributes].forEach(attribute => {
@@ -340,7 +429,13 @@
       redundantText.forEach(textNode => textNode.remove());
     }
     if (!includeLinks) clone.querySelectorAll('a').forEach(a => a.replaceWith(...a.childNodes));
-    if (!includeMedia) clone.querySelectorAll('img, picture, svg, canvas, figure[data-export-media]').forEach(element => element.remove());
+    if (!includeMedia) {
+      clone.querySelectorAll('img, picture, svg, canvas, figure[data-export-media]').forEach(element => element.remove());
+      clone.querySelectorAll('.chat-archive-card').forEach(card => {
+        [...card.children].filter(child => !child.textContent.trim()).forEach(child => child.remove());
+        card.style.gridTemplateColumns = 'minmax(0, 1fr)';
+      });
+    }
     return clone;
   }
 
@@ -356,13 +451,14 @@
   window.ChatArchiveExtractor = {
     nodes: messageNodes,
     idOf,
+    sourceIdOf,
     roleOf,
     contentRoot,
     mediaExclusions,
     payloadSize,
     maxPayloadCharacters,
     metadata() { return { title: title(), provider: provider(), url: location.href, exportedAt: new Date().toISOString() }; },
-    snapshot({ includeLinks = true, includeTimestamps = false, includeActivity = false, selectedOnly = false, outputFormat = null, includeUserImages = true, includeAssistantImages = true, includeImageDetails = false } = {}) {
+    snapshot({ includeLinks = true, includeTimestamps = false, includeActivity = false, selectedOnly = false, outputFormat = null, includeUserImages = true, includeAssistantImages = true, includeSourceIds = false } = {}) {
       const nodes = messageNodes();
       const activities = !isGemini && includeActivity ? activitiesByMessage(nodes, includeLinks) : new Map();
       const identifiers = new Set();
@@ -374,7 +470,7 @@
         if (selectedOnly && node.dataset.chatArchiveSelected !== 'true') return null;
         const messageRole = roleOf(node, index);
         const keepImages = !['html', 'pdf'].includes(outputFormat) || (messageRole === 'user' ? includeUserImages : includeAssistantImages);
-        const clone = cleanClone(node, includeLinks, keepImages, id, { includeImageDetails, role: messageRole, provider: provider() });
+        const clone = cleanClone(node, includeLinks, keepImages, id, ['html', 'pdf'].includes(outputFormat));
         // Activity is serialized separately and never counted twice in the answer.
         if (!isGemini) activityRoots(clone, true).forEach(root => root.remove());
         const item = {
@@ -386,6 +482,7 @@
         };
         if (!outputFormat || ['md', 'json'].includes(outputFormat)) item.markdown = textWithLinks(clone, true);
         if (!outputFormat || ['html', 'pdf', 'json'].includes(outputFormat)) item.html = clone.innerHTML.trim();
+        if (includeSourceIds) item.sourceMessageId = sourceIdOf(node);
         if (includeTimestamps) {
           item.messageId = window.ChatArchiveMessageTimestamps.messageId(node);
           item.createdAt = window.ChatArchiveMessageTimestamps.read(node, item.role);

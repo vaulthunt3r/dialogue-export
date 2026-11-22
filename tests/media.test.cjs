@@ -9,6 +9,62 @@ function fixture(body) {
   for (const file of ['content/media.js', 'content/extract.js', 'shared/renderers.js']) dom.window.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'));
   return dom;
 }
+
+test('HTML/PDF thumbnail cards preserve portable layout, badge styling and passive entity labels', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'fixtures/rich-cards.html'), 'utf8');
+  const d = new JSDOM(html, { url: 'https://chatgpt.com/c/test', runScripts: 'outside-only' });
+  try {
+    for (const file of ['content/media.js', 'content/extract.js', 'shared/renderers.js']) d.window.eval(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'));
+    for (const img of d.window.document.images) img.src = pixel;
+    const before = d.window.document.body.innerHTML;
+    for (const outputFormat of ['html', 'pdf']) {
+      const data = d.window.ChatArchiveExtractor.collect({ outputFormat });
+      const output = new JSDOM(d.window.ChatArchiveRenderers.html(data));
+      try {
+        const rows = output.window.document.querySelectorAll('.chat-archive-card');
+        assert.equal(rows.length, 2);
+        assert.equal(rows[0].style.getPropertyValue('--export-card-width'), '136px');
+        assert.equal(rows[0].querySelectorAll('figure img').length, 1);
+        assert.equal(rows[0].querySelector('.entity').textContent, 'Example browser');
+        assert.equal(rows[0].querySelector('.badge').style.backgroundColor, 'rgb(216, 243, 227)');
+        assert.equal(rows[0].querySelector('.card-text').style.flexDirection, 'column');
+        assert.equal(output.window.document.querySelector('button,script'), null);
+        assert.equal(output.window.document.querySelectorAll('a').length, 3);
+      } finally { output.window.close(); }
+    }
+    assert.equal(d.window.document.body.innerHTML, before, 'page is never restyled or rewritten');
+    const noImages = d.window.ChatArchiveExtractor.collect({ outputFormat: 'html', includeAssistantImages: false });
+    assert.doesNotMatch(noImages.messages[0].html, /<img/);
+    assert.match(noImages.messages[0].html, /Example browser/);
+  } finally { d.window.close(); }
+});
+
+test('right-hand cards drop fixed positioning, clipping and CSS resources while retaining content', () => {
+  const d = fixture(`<div style="display:flex;position:fixed;top:0;height:40px;overflow:hidden;background-image:url(https://example.com/tracker)"><div><span style="background-image:url(https://example.com/tracker);color:rgb(12,34,56)">Card text</span><button onclick="alert(1)">Entity name</button></div><img width="136" height="102" alt="Preview" src="${pixel}"></div>`);
+  try {
+    const item = d.window.ChatArchiveExtractor.collect({ outputFormat: 'html', includeLinks: false }).messages[0];
+    const output = new JSDOM(item.html);
+    try {
+      assert.ok(output.window.document.querySelector('.chat-archive-card-image-right'));
+      assert.match(output.window.document.body.textContent, /Card text.*Entity name/);
+      assert.doesNotMatch(item.html, /position:|overflow:|height: 40px|tracker|onclick|<button/);
+      assert.match(item.html, /color: rgb\(12, 34, 56\)/);
+    } finally { output.window.close(); }
+  } finally { d.window.close(); }
+});
+
+test('hidden icons in cards never shift the original-to-clone pairing of following images', () => {
+  const d = fixture(`<section style="display:flex;flex-direction:column"><div style="display:flex"><div><img width="136" height="102" alt="First" src="${pixel}"></div><div>First card<span style="display:none"><svg width="16" height="16"></svg></span></div></div><div style="display:flex"><div><img width="136" height="102" alt="Second" src="${pixel}"></div><div>Second card<span style="display:none"><svg width="16" height="16"></svg></span></div></div><p>After</p><img width="136" height="102" alt="Third" src="${pixel}"></section>`);
+  try {
+    const item = d.window.ChatArchiveExtractor.collect({ outputFormat: 'html' }).messages[0];
+    const output = new JSDOM(item.html);
+    try {
+      assert.deepEqual([...output.window.document.images].map(i => i.alt), ['First', 'Second', 'Third']);
+      assert.equal(output.window.document.querySelectorAll('figure[data-export-media]').length, 3);
+      assert.equal(output.window.document.querySelectorAll('.chat-archive-card')[1].querySelector('img').alt, 'Second');
+    } finally { output.window.close(); }
+  } finally { d.window.close(); }
+});
 test('image-only messages and linked attachment buttons survive HTML with links disabled', () => {
   const d = fixture(`<button><a href="https://example.com/file"><picture><source srcset="https://example.com/other"><img alt="Attachment" src="${pixel}" loading="lazy" srcset="https://example.com/other 2x"></picture></a></button>`);
   try {

@@ -6,11 +6,12 @@ function fixture(options = {}) {
   let receive, next = 0, automatic = true; const changes = new Set(), removed = new Set(), files = [], revoked = [], states = new Map();
   const notifications = [], badges = [], colors = [], relays = [];
   const context = vm.createContext({ indexedDB: new IDBFactory(), IDBKeyRange, Date, setTimeout, clearTimeout, AbortController,
-    crypto: { randomUUID: () => `job-${++next}` }, Blob, URL: { createObjectURL: () => `blob:${++next}`, revokeObjectURL: url => revoked.push(url) },
+    crypto: { randomUUID: () => `job-${++next}` }, Blob, URL: Object.assign(class extends URL {}, { createObjectURL: () => `blob:${++next}`, revokeObjectURL: url => revoked.push(url) }),
+    ChatArchiveApiMedia: { loadImage: options.imageLoader || (async () => ({ src: 'data:image/png;base64,synthetic', width: 1, height: 1 })) },
     ChatArchiveRenderers: { html: data => data.messages.map(m => m.html).join('') },
     browser: { runtime: { getURL: file => `moz-extension://fixture/${file}`, onMessage: { addListener: fn => { receive = fn; } } },
       action: { setBadgeText: async value => badges.push(value.text), setBadgeBackgroundColor: async value => colors.push(value.color) },
-      permissions: { contains: async () => options.permission === true },
+      permissions: { contains: async request => request.origins ? options.imagePermission !== false : options.permission === true },
       notifications: { create: async (id, details) => { if (options.notificationFailure) throw Error('OS unavailable'); notifications.push({ id, ...details }); } },
       tabs: { sendMessage: async (tabId, message, options) => { relays.push({tabId,message,options});return {ok:true}; }, create: async () => ({ id: 10 }), onRemoved: { addListener: fn => removed.add(fn) } },
       downloads: { onChanged: { addListener: fn => changes.add(fn), removeListener: fn => changes.delete(fn) },
@@ -24,6 +25,67 @@ function fixture(options = {}) {
     notifications, badges, colors, clock, relays,
     pending: () => { automatic = false; }, removeTab: async id => { for (const fn of removed) await fn(id); }, close: () => clock.uninstall() };
 }
+
+test('preview download bridge is limited to the ChatGPT top frame and OpenAI image paths', async () => {
+  const calls = [], f = fixture({ imageLoader: async (url, options) => { calls.push({ url, options }); return { src: 'data:image/png;base64,test', width: 1, height: 1 }; } });
+  const sender = { url: 'https://chatgpt.com/c/synthetic', tab: { id: 3 }, frameId: 0 };
+  const request = { type: 'PAGE_IMAGE_READ', id: 'image-1', url: 'https://images.openai.com/static-rsc-4/example?purpose=fullsize' };
+  try {
+    for (const url of ['https://evil.example/static-rsc-4/x', 'http://images.openai.com/static-rsc-4/x', 'https://images.openai.com/account', 'https://user@images.openai.com/static-rsc-4/x']) {
+      assert.equal((await f.send({ ...request, url }, sender)).ok, false);
+    }
+    assert.equal((await f.send(request, { ...sender, frameId: 2 })).ok, false);
+    assert.equal((await f.send(request, { ...sender, url: 'https://evil.example/' })).ok, false);
+    assert.equal(calls.length, 0);
+    assert.equal((await f.send(request, sender)).ok, true);
+    assert.equal(calls.length, 1); assert.equal(calls[0].options.token, undefined);
+    assert.equal(f.clock.countTimers(), 0);
+  } finally { f.close(); }
+});
+
+test('preview requests are bounded, cancel only by their owner, and abort on tab close', async () => {
+  let signal;
+  const f = fixture({ imageLoader: async (url, options) => { signal = options.signal; await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(Error('Stopped')), { once: true })); } });
+  const sender = { url: 'https://chatgpt.com/c/synthetic', tab: { id: 3 }, frameId: 0 };
+  const request = { type: 'PAGE_IMAGE_READ', id: 'image-1', url: 'https://images.openai.com/static-rsc-4/example' };
+  try {
+    const pending = f.send(request, sender);
+    assert.equal((await f.send(request, sender)).code, 'IMAGE_FETCH_BUSY');
+    await f.send({ type: 'PAGE_IMAGE_CANCEL', id: 'image-1' }, { ...sender, tab: { id: 4 } });
+    assert.equal(signal.aborted, false);
+    await f.removeTab(3);
+    assert.equal((await pending).code, 'IMAGE_ABORTED');
+    assert.equal(signal.aborted, true);
+    assert.equal(f.clock.countTimers(), 0);
+  } finally { f.close(); }
+});
+
+test('missing image access makes no request; granting access lets the same request succeed', async () => {
+  let calls = 0;
+  const options = { imagePermission: false, imageLoader: async () => { calls++; return { src: 'data:image/png;base64,test', width: 1, height: 1 }; } };
+  const f = fixture(options), sender = { url: 'https://chatgpt.com/c/synthetic', tab: { id: 3 }, frameId: 0 };
+  const request = { type: 'PAGE_IMAGE_READ', id: 'image-1', url: 'https://images.openai.com/static-rsc-4/example' };
+  try {
+    assert.equal((await f.send(request, sender)).code, 'IMAGE_PERMISSION_REQUIRED');
+    assert.equal(calls, 0); assert.equal(f.clock.countTimers(), 0);
+    options.imagePermission = true;
+    assert.equal((await f.send(request, sender)).ok, true); assert.equal(calls, 1);
+    assert.equal((await f.send({ type: 'IMAGE_ACCESS_OPEN' }, { ...sender, url: 'https://evil.example' })).ok, false);
+    assert.equal((await f.send({ type: 'IMAGE_ACCESS_OPEN' }, sender)).ok, true);
+  } finally { f.close(); }
+});
+
+test('image download diagnostics expose fixed categories and HTTP status, never arbitrary error data', async () => {
+  for (const code of ['IMAGE_HTTP_ERROR', 'IMAGE_NETWORK_ERROR', 'IMAGE_FORMAT_UNSUPPORTED', 'IMAGE_DECODE_FAILED', 'PRIVATE_URL']) {
+    const f = fixture({ imageLoader: async () => { const e = Error('PRIVATE_URL SECRET'); e.imageDiagnostic = { code, httpStatus: 403, url: 'PRIVATE_URL', token: 'SECRET' }; throw e; } });
+    try {
+      const r = await f.send({ type: 'PAGE_IMAGE_READ', id: 'image-1', url: 'https://images.openai.com/static-rsc-4/example' }, { url: 'https://chatgpt.com/c/fixture', tab: { id: 1 } });
+      assert.equal(r.code, code === 'PRIVATE_URL' ? 'IMAGE_FETCH_FAILED' : code);
+      assert.equal(r.diagnostic.httpStatus, code === 'IMAGE_HTTP_ERROR' ? 403 : undefined);
+      assert.doesNotMatch(JSON.stringify(r), /PRIVATE_URL|SECRET/);
+    } finally { f.close(); }
+  }
+});
 
 test('panel commands require the extension iframe, bind to its sender tab and reject arbitrary relay messages',async()=>{
   const f=fixture({permission:true});

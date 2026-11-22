@@ -238,6 +238,92 @@ test('network failure integrates with DOM fallback and does not save an empty AP
   } finally { f.close(); }
 });
 
+test('HTML visual-component fallback collects rendered card content instead of raw API component source', async () => {
+  const f = fixture(URL, true);
+  try {
+    for (const file of ['shared/vendor/markdown-it.js', 'content/markdown.js']) f.w.eval(read(file));
+    const html = read('tests/fixtures/rich-cards.html');
+    f.w.document.querySelector('main').outerHTML = html.slice(html.indexOf('<main>'));
+    f.w.document.querySelector('main').insertAdjacentHTML('afterbegin', '<div data-message-author-role="user" data-message-id="question">Page question</div>');
+    const r = conversation(); r.mapping.answer.message.content.parts = ['<box gap={3}><AsyncImage query="browser"/><Entity value="Example browser"/></box>'];
+    f.w.fetch = async url => json(url.endsWith('/session') ? { accessToken: 'SECRET' } : r);
+    const pending = f.w.receive({ type: 'COLLECT', options: { outputFormat: 'html', includeLinks: true } });
+    await f.clock.runAllAsync();
+    const result = await pending;
+    assert.equal(result.collectionMethod, 'chatgpt-page-verified');
+    assert.equal(result.messages.length, 2);
+    assert.match(result.messages[1].html, /A description that should wrap beside the image/);
+    assert.doesNotMatch(result.messages[1].html, /AsyncImage|SECRET/);
+    assert.equal(f.clock.countTimers(), 0);
+  } finally { f.close(); }
+});
+
+function eightVisualMessages(f, mutate = () => {}) {
+  for (const file of ['shared/vendor/markdown-it.js', 'content/markdown.js']) f.w.eval(read(file));
+  const raw = { conversation_id: ID, current_node: 'm7', mapping: { root: node('root', null) } };
+  const dom = [];
+  for (let i = 0; i < 8; i++) {
+    const role = i % 2 ? 'assistant' : 'user';
+    raw.mapping[`m${i}`] = node(`m${i}`, i ? `m${i-1}` : 'root', role, i === 1 ? '<box gap={3}><Entity value="Card"/></box>' : `Message ${i}`);
+    dom.push(i % 2 ? `<div data-chatgpt-selection-message-id="m${i}"><p>Rendered message ${i}</p></div>`
+      : `<div data-turn-key="turn-${i}" data-chatgpt-search-message-ids='["m${i}"]'><div data-user-message-bubble>Rendered message ${i}</div></div>`);
+  }
+  f.w.document.querySelector('main').innerHTML = dom.join('');
+  f.w.fetch = async url => json(url.endsWith('/session') ? { accessToken: 'SECRET' } : raw);
+  mutate(f.w.document.querySelector('main'), raw);
+  return raw;
+}
+
+test('all eight rendered messages verified against the API branch export without a single scroll write', async () => {
+  const f = fixture(URL, true);
+  try {
+    eightVisualMessages(f);
+    const host = f.w.document.querySelector('main'); host.style.overflowY = 'auto';
+    let scrollWrites = 0;
+    Object.defineProperties(host, { clientHeight: { value: 600 }, scrollHeight: { value: 5000 },
+      scrollTop: { get: () => 4400, set: () => { scrollWrites++; } } });
+    let imageChecks = 0;
+    f.w.ChatArchiveMedia = { beginExport() {}, endExport() {}, preserve() {}, waitForImages: async () => { imageChecks++; } };
+    const pending = f.w.receive({ type: 'COLLECT', options: { outputFormat: 'html', waitForImages: true } });
+    const resultPromise = pending.then(value => ({ value }), error => ({ error }));
+    await f.clock.runAllAsync();
+    const { value: result, error } = await resultPromise;
+    assert.ifError(error);
+    assert.equal(scrollWrites, 0);
+    assert.equal(imageChecks, 1);
+    assert.equal(result.messages.length, 8);
+    assert.equal(result.collectionMethod, 'chatgpt-page-verified');
+    assert.deepEqual(clone(result.messages.map(m => m.text)), Array.from({ length: 8 }, (_, i) => `Rendered message ${i}`));
+    assert.ok(result.messages.every(m => !('sourceMessageId' in m)));
+    assert.equal(f.clock.countTimers(), 0);
+  } finally { f.close(); }
+});
+
+test('rendered branch verification rejects missing, duplicated and reordered messages', async () => {
+  for (const change of ['missing', 'duplicate', 'reordered', 'changed-during-images']) {
+    const f = fixture(URL, true);
+    try {
+      eightVisualMessages(f);
+      const main = f.w.document.querySelector('main');
+      const mutate = () => {
+        if (change === 'missing') main.lastElementChild.remove();
+        else if (change === 'duplicate') main.lastElementChild.setAttribute('data-chatgpt-selection-message-id', 'm5');
+        else if (change === 'reordered') main.prepend(main.lastElementChild);
+        else main.lastElementChild.setAttribute('data-chatgpt-selection-message-id', 'foreign-after-image-load');
+      };
+      if (change !== 'changed-during-images') mutate();
+      else f.w.ChatArchiveMedia = { beginExport() {}, endExport() {}, preserve() {}, waitForImages: async () => { mutate(); } };
+      const pending = f.w.receive({ type: 'COLLECT', options: { outputFormat: 'html', waitForImages: true } });
+      const settled = pending.then(value => ({ value }), error => ({ error }));
+      await f.clock.runAllAsync();
+      const result = await settled;
+      assert.ok(result.error, change + ': must not return incomplete or different rendered data');
+      assert.match(result.error.message, /matched to the complete current conversation|identifier is shared by multiple messages/, change);
+      assert.equal(f.clock.countTimers(), 0);
+    } finally { f.close(); }
+  }
+});
+
 test('temporary chat never makes a backend request', async () => {
   const f = fixture('https://chatgpt.com/?temporary-chat=true');
   try {

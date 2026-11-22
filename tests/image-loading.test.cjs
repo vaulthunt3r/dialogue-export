@@ -21,6 +21,64 @@ function state(img, initial = false) {
   return s;
 }
 
+test('OpenAI preview bytes are embedded and cached without reading cross-origin canvas pixels', async () => {
+  const f = fixture('<img src="https://images.openai.com/static-rsc-4/synthetic?purpose=fullsize" alt="Preview">');
+  try {
+    state(f.w.document.images[0], true);
+    const requests = [];
+    f.w.browser = { runtime: { sendMessage: async request => { requests.push(request); return { ok: true, image: { src: pixel, width: 1, height: 1, type: 'image/png' } }; } } };
+    f.w.HTMLCanvasElement.prototype.getContext = () => { throw Error('Cross-origin canvas must not be read'); };
+    f.w.eval(read('content/extract.js'));
+    f.w.ChatArchiveMedia.beginExport();
+    await f.w.ChatArchiveMedia.waitForImages(f.roots);
+    await f.w.ChatArchiveMedia.waitForImages(f.roots);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].type, 'PAGE_IMAGE_READ');
+    const data = f.w.ChatArchiveExtractor.collect({ outputFormat: 'html', includeImageDetails: true });
+    assert.match(data.messages[0].html, /src="data:image\/png;base64,/);
+    assert.doesNotMatch(data.messages[0].html, /src="https:|linked, not embedded|page snapshot/);
+    assert.doesNotMatch(data.messages[0].html, /figcaption|no re-encoding|original file not verified/);
+    f.w.ChatArchiveMedia.endExport();
+    assert.equal(f.clock.countTimers(), 0);
+  } finally { f.close(); }
+});
+
+test('Stop during preview download cancels the owning request; failed fetches never become linked success', async () => {
+  for (const cancel of [false, true]) {
+    const f = fixture('<img src="https://images.openai.com/static-rsc-4/synthetic" alt="Preview">');
+    try {
+      state(f.w.document.images[0], true);
+      const requests = [];
+      f.w.browser = { runtime: { sendMessage: request => { requests.push(request); return cancel && request.type === 'PAGE_IMAGE_READ' ? new Promise(() => {}) : Promise.resolve({ ok: false }); } } };
+      let stopped = false;
+      const task = f.w.ChatArchiveMedia.waitForImages(() => { if (stopped) throw Error('Export stopped'); return f.roots(); });
+      const rejection = assert.rejects(task, cancel ? /Export stopped/ : /preview image could not be embedded/);
+      if (cancel) { await f.clock.tickAsync(250); stopped = true; await f.clock.tickAsync(100); }
+      await rejection;
+      assert.equal(requests.filter(r => r.type === 'PAGE_IMAGE_CANCEL').length, cancel ? 1 : 0);
+      assert.equal(f.clock.countTimers(), 0);
+    } finally { f.close(); }
+  }
+});
+
+test('preview failure reports distinguish missing permission and HTTP errors without URLs or arbitrary fields', async () => {
+  for (const code of ['IMAGE_PERMISSION_REQUIRED', 'IMAGE_HTTP_ERROR', 'IMAGE_NETWORK_ERROR', 'SECRET']) {
+    const f = fixture('<img src="https://images.openai.com/static-rsc-4/PRIVATE" alt="PRIVATE">');
+    try {
+      state(f.w.document.images[0], true);
+      f.w.browser = { runtime: { sendMessage: async () => ({ ok: false, code, diagnostic: { httpStatus: 403, url: 'PRIVATE', token: 'SECRET' } }) } };
+      await assert.rejects(f.w.ChatArchiveMedia.waitForImages(f.roots), error => {
+        assert.equal(error.mediaDiagnostic.download.code, code === 'SECRET' ? 'IMAGE_RESPONSE_INVALID' : code);
+        assert.equal(error.mediaDiagnostic.download.httpStatus, code === 'IMAGE_HTTP_ERROR' ? 403 : undefined);
+        assert.equal(error.message.includes('Click Allow image access'), code === 'IMAGE_PERMISSION_REQUIRED');
+        assert.doesNotMatch(JSON.stringify(error.mediaDiagnostic), /PRIVATE|SECRET/);
+        return true;
+      });
+      assert.equal(f.clock.countTimers(), 0);
+    } finally { f.close(); }
+  }
+});
+
 test('slow images load concurrently, lazy attributes restore and decoded images do not wait again', async () => {
   const f = fixture(`<img src="${pixel}" loading="lazy"><img src="${pixel}">`);
   try {
