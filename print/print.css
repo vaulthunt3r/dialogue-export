@@ -31,6 +31,8 @@ code { font-family: ui-monospace, monospace; }
 }
 table { border-collapse: collapse; width: 100%; }
 th, td { border: 1px solid #cfd4dc; padding: 7px; text-align: left; }
+.message th > :first-child, .message td > :first-child { margin-top: 0; }
+.message th > :last-child, .message td > :last-child { margin-bottom: 0; }
 img { max-width: 100%; height: auto; }
 .message { min-width: 0; overflow-wrap: anywhere; }
 .message h1, .message h2, .message h3, .message h4 { color: inherit; text-transform: none; letter-spacing: normal; line-height: 1.3; margin: 1em 0 .5em; }
@@ -63,6 +65,8 @@ img { max-width: 100%; height: auto; }
   a { color: inherit; text-decoration: none; }
 }
 .export-api-figure { margin: 14px 0; break-inside: avoid; }
+.chat-archive-component { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.export-static-component>p{margin:0}.export-static-component>p+p{margin-top:.5em}.export-static-component[data-d-component="row"]>*{min-width:0}.export-unavailable-reference{color:#596273;font-size:.85em}
 .export-api-figure .export-api-image { margin-bottom: 6px; }
 .chat-archive-card{display:grid;grid-template-columns:minmax(0,var(--export-card-width,136px)) minmax(0,1fr);align-items:start;gap:12px;max-width:100%;height:auto;overflow:visible}
 .chat-archive-card-image-right{grid-template-columns:minmax(0,1fr) minmax(0,var(--export-card-width,136px))}

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Dialogue Export",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "Export ChatGPT and Gemini conversations to TXT, Markdown, HTML, JSON, or PDF.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -11,6 +11,7 @@
   },
   "permissions": [
     "activeTab",
+    "scripting",
     "downloads",
     "storage"
   ],
@@ -57,6 +58,7 @@
         "content/media.js",
         "content/extract.js",
         "shared/vendor/markdown-it.js",
+        "content/components.js",
         "content/markdown.js",
         "content/api-media.js",
         "content/chatgpt-api.js",

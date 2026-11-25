@@ -4,9 +4,9 @@
 
 A Firefox extension for exporting a conversation to **TXT, Markdown, HTML, JSON or PDF**, and saving multiple ChatGPT conversations in a **ZIP archive**. Compact monochrome controls, readable output and local processing.
 
-**[Install 0.5.7 — Mozilla-signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.7/Dialogue-Export-v0.5.7-signed.xpi)** · [All release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.7) · [What's new](docs/RELEASE-v0.5.7.md)
+**[Install 0.5.8 — Mozilla-signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.8/Dialogue-Export-v0.5.8-signed.xpi)** · [All release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.8) · [What's new](docs/RELEASE-v0.5.8.md)
 
-**New in 0.5.7:** supported ChatGPT thumbnail cards keep their rendered layout in HTML/PDF, OpenAI previews can be embedded offline, and exports no longer add technical image captions. [Changes and the causes of the previous rendering problems](docs/RELEASE-v0.5.7.md).
+**New in 0.5.8:** direct static cards and SVG diagrams, image galleries, early image-access checks, retry and partial-save handling. The maintainer confirmed all images saved in 66 HTML parts. [Release notes and validation](docs/RELEASE-v0.5.8.md).
 
 ## See it in a minute
 
@@ -31,7 +31,7 @@ English titles and original music. This 0.5.6 feature tour uses fictional conver
 
 Version 0.5.6 adds direct reading of saved ChatGPT conversation data using your existing session. Supported **All messages → TXT/MD/HTML/PDF** exports no longer need to scroll the page to collect messages. The reader checks the conversation identity and follows the current response branch.
 
-Page collection remains available for temporary chats, selected messages, Working / Thinking sections, single-chat JSON and unsupported direct-export cases. The status explains when it is used. The internal ChatGPT API can change, so direct export is not guaranteed for every conversation.
+In **0.5.8**, direct reading also covers single-chat JSON and available saved Working / Thinking records. Saved ChatGPT conversations no longer switch to automatic page scrolling: unsupported content or an unavailable response stops with an explanation. Temporary chats, selected messages and Gemini retain their page readers. The internal ChatGPT API can change, so direct export is not guaranteed for every conversation.
 
 During user testing, a conversation containing **over 35,000 Markdown lines** exported quickly and completely; TXT, HTML and PDF were also confirmed. This is a user-reported result, not a controlled speed benchmark or a guarantee for every chat.
 
@@ -41,7 +41,19 @@ Choose whether to include user images and AI-response images. Images are exporte
 
 Supported ChatGPT thumbnail cards retain their layout, badges and links in HTML/PDF through rendered-page collection. This can avoid scrolling when every mounted message matches the complete current conversation branch. If an OpenAI preview needs image-host permission, use **Allow image access**, then retry the export. Interactive widgets and every page style are not reproduced exactly.
 
+Version **0.5.8** builds supported static cards and SVG diagrams directly from saved data, including repeated rows, calculated labels and proportional bars, even when the content is not loaded on the page. Image components use explicit URLs or exact saved references, including nested `image_group` results. Direct OpenAI previews use the extension's existing background download permission, avoiding page CORS failures; an explicitly saved supported preview is preferred over its original third-party image URL. When the normalized image list contains such previews, permission is checked before image downloading begins. Missing access can be enabled from the export menu, then export restarted. Unsupported cards can still use an already loaded, verified page node; they never trigger a scan of a saved chat. Success and error notices disappear after five seconds; the last error and structural diagnostic remain accessible in the export menu. Missing citation metadata is labelled without dropping surrounding text. See [release notes and limits](docs/RELEASE-v0.5.8.md).
+
+In 0.5.8, Stop or an image-embedding error offers **Save collected / Discard** for direct HTML/PDF. Complete messages already prepared can be saved as a clearly marked partial export; the unfinished message is excluded. The choice remains available in the export menu. Already downloaded files remain after discarding. This is not resumable after a page reload.
+
+Version 0.5.8 retries temporary image failures up to three attempts and obtains a fresh download link for each attempt when ChatGPT supplies a file reference. Completed images are retained. Stop also cancels retry waits; a persistent failure still offers Save collected / Discard. This does not establish that every unavailable image can be recovered.
+
 Large direct HTML/PDF exports can split into numbered parts. HTML parts download sequentially. PDF opens a print page; select **Save as PDF** and print each part separately. **Compact PDF pagination** removes message boxes in print so text can flow across pages with fewer large gaps. It does not change the on-screen HTML layout.
+
+### How single-chat export works
+
+For a saved ChatGPT chat, **All messages** reads its saved data with your existing session and follows the current branch. The extension normalizes messages, renders ordinary Markdown and supported static cards/SVG locally, then prepares enabled images. It checks known OpenAI preview permission early, resolves file links, validates downloads and retries temporary failures without discarding the completed prefix.
+
+Large HTML/PDF exports stage numbered parts locally to limit memory. HTML downloads the parts sequentially; PDF opens a print view. Stop or a persistent image failure offers a clearly labelled partial save of complete messages. Unsupported saved content stops with an explanation instead of starting a page scan. Selected messages, temporary chats and Gemini keep their page readers. [Mechanism, failure causes and limits](docs/RELEASE-v0.5.8.md#how-export-works-now).
 
 ### Several chats, one ZIP workflow
 
@@ -51,7 +63,7 @@ Unsupported chats are skipped while the others continue. If a later read error s
 
 ## Install and start
 
-1. Download the [signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.7/Dialogue-Export-v0.5.7-signed.xpi), open it in **Firefox 142 or later** and confirm installation.
+1. Download the [signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.8/Dialogue-Export-v0.5.8-signed.xpi), open it in **Firefox 142 or later** and confirm installation.
 2. Open or reload a ChatGPT conversation. Click the dialogue icon in the page margin or on the Firefox toolbar.
 3. Choose your messages and format, review **Export options**, then press **Export** or **Prepare PDF**. Keep the source tab open until collection finishes.
 
@@ -64,7 +76,7 @@ Optional completion notifications are off by default. Enable them if you want a 
 - **ZIP is a text archive, not a complete account backup.** It excludes image files, PDF, Working / Thinking sections and alternative branches. Project-chat coverage is unverified; JSON is the normalized exported message model. There is no automatic resume.
 - **Some chat content is still unsupported.** A real 42-chat archive run saved 36 and rejected six: four `RICH_REFERENCE`, one `MESSAGE_TYPE` and one `RESPONSE_UNFINISHED`. These cases remain open. The report explains failures; try exporting an affected chat separately from its page.
 - **Very large or image-heavy chats still have limits.** Numbered parts reduce retained output, but response, image and message limits remain. They do not cap Firefox's total RAM. One image-bearing chat was confirmed in three HTML/PDF parts; coverage of every heavy chat is not established.
-- **Activity export includes only available content.** Expand Working / Thinking sections first. Content that ChatGPT has removed cannot be recovered. Interactive applications and some embedded media cannot be reproduced faithfully.
+- **Activity export includes only available content.** Saved-chat export reads available Thinking summaries and Working updates directly; it does not reconstruct missing tool-event details. Selected-message and temporary-chat exports still need expanded sections. Interactive applications and arbitrary component programs are not supported by the static renderer.
 
 Check the beginning, middle and end of important exports. [Report a problem](https://github.com/vaulthunt3r/dialogue-export/issues) with the extension/browser version and error code; private conversation text is usually unnecessary. Archive reports contain chat titles and IDs, so review them before sharing.
 
@@ -80,7 +92,7 @@ Processing takes place in Firefox. There are no developer uploads, analytics or 
 
 ## Development and acknowledgments
 
-From the source archive, run `npm ci --ignore-scripts` and `npm test`. Runtime files are readable JavaScript plus a pinned local Markdown parser. [Reproduction and packaging instructions](docs/AMO_SUBMISSION-v0.5.7.md) document the submitted package; the [release notes](docs/RELEASE-v0.5.7.md) summarize validation. For a temporary Firefox installation, extract the runtime ZIP and load its `manifest.json` through `about:debugging#/runtime/this-firefox`.
+From the source archive, run `npm ci --ignore-scripts` and `npm test`. Runtime files are readable JavaScript plus a pinned local Markdown parser. [Reproduction and packaging instructions](docs/AMO_SUBMISSION-v0.5.8.md) document the submitted package; the [release notes](docs/RELEASE-v0.5.8.md) summarize validation. For a temporary Firefox installation, extract the runtime ZIP and load its `manifest.json` through `about:debugging#/runtime/this-firefox`.
 
 The direct-reading approach was inspired by **[John2022 / ChatGPT Conversation Export](https://github.com/John2022/chatgpt-conversation-export)**. Thank you for demonstrating the benefit of retrieving conversation data directly. Dialogue Export combines direct reading with its existing page collector, validation, output formats and archive workflow. [markdown-it](https://github.com/markdown-it/markdown-it) handles Markdown rendering locally; dependency and icon notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

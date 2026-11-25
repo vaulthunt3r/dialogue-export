@@ -1,4 +1,5 @@
 (function () {
+  if (globalThis.ChatArchiveContentReady) return;
   let picking = false;
   let observer;
   const messageCache = new Map();
@@ -9,13 +10,26 @@
   let exportStatus = null;
   let activePartJobId = null;
   let uiTimer;
+  let dismissTimer;
   let collectingUrl = null;
   let cancelRequested = false;
+  let stopChoice = null;
+  let pageInterrupted = false;
   function assertConversation() {
-    if (cancelRequested) throw new Error('Export stopped. No file was saved.');
-    if (collectingUrl !== null && location.href !== collectingUrl) {
+    if (pageInterrupted || collectingUrl !== null && location.href !== collectingUrl) {
       throw new Error('The conversation changed during export. Open the intended chat and export again.');
     }
+    if (cancelRequested) { const error = new Error('Export stopped.'); error.exportStopped = true; throw error; }
+  }
+  function requestStop() {
+    if (!activeExport || exportStatus?.cancellable === false) return;
+    cancelRequested = true;
+    exportStatus.label = exportStatus.phase === 'saving' ? 'Stopping after the current file finishes…' : 'Stopping…';
+    progressView(75, exportStatus.label, 'running', exportStatus.processed);
+  }
+  function resolveStop(action) {
+    if (!stopChoice || !['save', 'discard'].includes(action) || action === 'save' && !exportStatus?.canSaveCollected) return false;
+    const resolve = stopChoice; stopChoice = null; resolve(action); return true;
   }
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -44,12 +58,13 @@
       await window.ChatArchiveMedia?.waitForImages(() => {
         assertConversation();
         const extractor = window.ChatArchiveExtractor;
-        return extractor.nodes().map((node, index) => ({ node, owner: extractor.idOf(node, index), role: extractor.roleOf(node, index) }))
+        return extractor.nodes().map((node, index) => ({ node, index, role: extractor.roleOf(node, index) }))
+          .filter(({ node }) => !options.sourceMessageIds || options.sourceMessageIds.includes(extractor.sourceIdOf(node)))
           .filter(({ node }) => !options.selectedOnly || node.dataset.chatArchiveSelected === 'true')
           .filter(({ role }) => (role === 'user' ? options.includeUserImages : options.includeAssistantImages) !== false)
-          .map(({ node, owner }) => {
+          .map(({ node, index }) => {
             const root = extractor.contentRoot(node);
-            return { node: root, owner, excludedRoots: extractor.mediaExclusions(root) };
+            return { node: root, owner: extractor.idOf(node, index), excludedRoots: extractor.mediaExclusions(root) };
           });
       }, { onProgress: options.onImageProgress });
     }
@@ -265,7 +280,8 @@
       const update = (...args) => { progress = args; onProgress(...args); };
       const result = await collectCurrent({ ...options, onImageProgress: (ready, total) =>
         onProgress(progress[0], `Waiting for images: ${ready}/${total}`, progress[2], progress[3]) }, update);
-      assertConversation();
+      try { assertConversation(); }
+      catch (error) { if (error.exportStopped) error.partialData = result; throw error; }
       return result;
     } finally {
       collectingUrl = null;
@@ -276,14 +292,16 @@
 
   async function collectCurrent(options = {}, onProgress = () => {}) {
     if (window.ChatArchiveApi?.eligible(options)) {
-      const result = await window.ChatArchiveApi.collect(options, assertConversation, onProgress, options.onPart);
+      const result = await window.ChatArchiveApi.collect(options, assertConversation, onProgress, options.onPart,
+        (expected, needed, report) => collectRenderedMessages(expected, needed, options, report));
       if (result.data) {
-        if (exportStatus) exportStatus.collectionNotice = ['html', 'pdf'].includes(options.outputFormat)
-          ? `direct ${options.outputFormat.toUpperCase()} export${result.data.embeddedImages ? ` · ${result.data.embeddedImages} images embedded` : ''}` : 'direct text export';
+        if (exportStatus) exportStatus.collectionNotice = result.data.collectionMethod === 'chatgpt-api-rendered'
+          ? 'Direct export · loaded card layout preserved · no scrolling'
+          : `Direct ${options.outputFormat.toUpperCase()} export · no scrolling${result.data.componentMessages ? ' · cards rendered from saved data' : ''}${result.data.embeddedImages ? ` · ${result.data.embeddedImages} images embedded` : ''}${result.data.unavailableCitations ? ' · some source links unavailable' : ''}`;
         return result.data;
       }
       if (exportStatus) {
-        exportStatus.collectionNotice = `${result.fallback} Page collection was used.`;
+        exportStatus.collectionNotice = result.fallback;
         exportStatus.sourceDiagnostic = result.sourceDiagnostic || null;
       }
       if (result.pageMessages?.length) {
@@ -299,6 +317,9 @@
             return verifiedPageResult(data, options);
           }
         }
+      }
+      if (window.ChatArchiveApi.conversationId(location.href)) {
+        throw new Error(`${result.fallback} Automatic page scrolling is disabled for saved ChatGPT conversations. No file was saved.`);
       }
       onProgress(2, `${result.fallback} Reading the page instead.`);
     }
@@ -319,6 +340,48 @@
   function matchesPageMessages(messages, expected) {
     return !!expected?.length && messages.length === expected.length && messages.every((message, index) =>
       message.sourceMessageId === expected[index].id && message.role === expected[index].role);
+  }
+
+  async function collectRenderedMessages(expected, needed, options, report = () => {}) {
+    const extractor = window.ChatArchiveExtractor;
+    const positions = new Map(expected.map((message, index) => [message.id, { ...message, index }]));
+    const matches = phase => {
+      let previous = -1, code = null, unidentified = 0, ambiguous = 0;
+      const present = new Set();
+      const nodes = extractor.nodes();
+      for (const [index, node] of nodes.entries()) {
+        const identity = extractor.sourceIdentityOf?.(node) || { id: extractor.sourceIdOf(node) };
+        if (identity.ambiguous) { ambiguous++; code ||= 'RENDERED_ID_AMBIGUOUS'; continue; }
+        // The API supplies ordinary text. An unrelated bubble without a source
+        // ID cannot invalidate an exactly identified card, and is never copied.
+        if (!identity.id) { unidentified++; continue; }
+        const message = positions.get(identity.id);
+        if (!message) { code ||= 'RENDERED_BRANCH_MISMATCH'; continue; }
+        if (message.index <= previous) code ||= 'RENDERED_ORDER_MISMATCH';
+        if (extractor.roleOf(node, index) !== message.role) code ||= 'RENDERED_ROLE_MISMATCH';
+        previous = message.index; present.add(identity.id);
+      }
+      const missing = needed.filter(id => !present.has(id));
+      if (missing.length) code ||= 'RENDERED_MESSAGE_NOT_LOADED';
+      if (!code) return true;
+      report({ version: 1, reason: 'rendered-message-match-failed', code, phase,
+        expectedMessages: expected.length, mountedMessages: nodes.length, requiredRenderedMessages: needed.length,
+        matchedRenderedMessages: needed.length - missing.length, unidentifiedPageMessages: unidentified, ambiguousPageMessages: ambiguous,
+        missingMessagePositions: missing.slice(0, 12).map(id => positions.get(id).index + 1) });
+      return false;
+    };
+    if (!matches('before-images')) return null;
+    const selection = { ...options, sourceMessageIds: needed, includeSourceIds: true };
+    await prepareImages(selection);
+    assertConversation();
+    if (!matches('after-images')) return null;
+    const messages = extractor.snapshot(selection);
+    if (!matchesPageMessages(messages, needed.map(id => positions.get(id)))) {
+      report({ version: 1, reason: 'rendered-message-match-failed', code: 'RENDERED_CONTENT_MISMATCH', phase: 'snapshot',
+        expectedMessages: expected.length, requiredRenderedMessages: needed.length, collectedRenderedMessages: messages.length });
+      return null;
+    }
+    return new Map(messages.map(message => [message.sourceMessageId, { html: message.html }]));
   }
 
   function cachedPageResult(options) {
@@ -427,7 +490,24 @@
     if (!uiTimer) uiTimer = setInterval(syncAppearance, 1000);
   }
 
+  function dismissProgress(view) {
+    clearTimeout(dismissTimer); dismissTimer = null;
+    if (!view?.isConnected) return;
+    view.remove(); window.ChatArchivePanel?.status(null); window.ChatArchivePanel?.layout(); syncAppearance();
+    browser.runtime.sendMessage({ type: 'EXPORT_DISMISSED' }).catch(() => {});
+  }
+
+  function scheduleProgressDismiss(view) {
+    clearTimeout(dismissTimer); dismissTimer = null;
+    if (!['done', 'error'].includes(exportStatus?.state) || !view) return;
+    const completed = exportStatus;
+    dismissTimer = setTimeout(() => {
+      if (!activeExport && exportStatus === completed) dismissProgress(view);
+    }, Math.max(0, 5000 - (Date.now() - completed.finishedAt)));
+  }
+
   function progressView(percent, label, state = 'running', processed = 0) {
+    clearTimeout(dismissTimer); dismissTimer = null;
     let view = document.querySelector('.chat-archive-progress');
     if (!view) {
       view = document.createElement('div');
@@ -445,11 +525,8 @@
       dismiss.type = 'button'; dismiss.className = 'chat-archive-dismiss';
       dismiss.textContent = '×'; dismiss.setAttribute('aria-label', 'Dismiss export status');
       dismiss.addEventListener('click', () => {
-        if (activeExport) { cancelRequested = true; dismiss.disabled = true; }
-        else {
-          view.remove(); window.ChatArchivePanel?.status(null); window.ChatArchivePanel?.layout(); syncAppearance();
-          browser.runtime.sendMessage({ type: 'EXPORT_DISMISSED' }).catch(() => {});
-        }
+        if (activeExport) { requestStop(); dismiss.disabled = true; }
+        else dismissProgress(view);
       });
       row.append(title, elapsed, dismiss);
       const detail = document.createElement('div'); detail.className = 'chat-archive-progress-detail';
@@ -466,19 +543,31 @@
     }
     view.dataset.state = state;
     view.querySelector('.chat-archive-progress-more summary').textContent = `[+] ${processed} messages`;
-    if (state === 'error') view.querySelector('.chat-archive-progress-more').open = true;
+    if (state === 'error' || state === 'decision') view.querySelector('.chat-archive-progress-more').open = true;
     window.ChatArchivePanel?.status(state);
     if (exportStatus) exportStatus.cancellable = state === 'running' && percent < 98 && !cancelRequested;
     setText(view.querySelector('.chat-archive-progress-title'), label);
-    const detail = state === 'error' ? 'Open Dialogue Export to try again.' : `${processed} messages collected${state === 'running' ? ' · keep this tab open' : exportStatus?.format === 'pdf' ? ' · save from the print page' : ' · check the save dialog or Downloads'}${state === 'done' && exportStatus?.timestampNotice ? ` · ${exportStatus.timestampNotice}` : ''}`;
+    const detail = state === 'decision' ? exportStatus.stopDetail : state === 'error' ? 'Open Dialogue Export to try again.' : `${processed} messages collected${state === 'running' ? ' · keep this tab open' : exportStatus?.format === 'pdf' ? ' · save from the print page' : ' · check the save dialog or Downloads'}${state === 'done' && exportStatus?.timestampNotice ? ` · ${exportStatus.timestampNotice}` : ''}`;
     setText(view.querySelector('.chat-archive-progress-detail'), `${detail}${exportStatus?.collectionNotice ? ` · ${exportStatus.collectionNotice}` : ''}`);
     const dismiss = view.querySelector('.chat-archive-dismiss');
+    dismiss.hidden = state === 'decision';
     dismiss.textContent = state === 'running' ? '[Stop]' : '[x]';
     dismiss.setAttribute('aria-label', state === 'running' ? 'Stop export' : 'Dismiss export status');
     // Handoff cannot be cancelled after the browser has received the file.
     dismiss.disabled = state === 'running' && (cancelRequested || percent >= 98);
+    view.querySelector('.chat-archive-stop-choice')?.remove();
+    if (state === 'decision') {
+      const actions = document.createElement('div'); actions.className = 'chat-archive-stop-choice';
+      for (const [action, label] of [['save', exportStatus.phase === 'saving' ? '[ Save remaining ]' : '[ Save collected ]'], ['discard', '[ Discard ]']]) {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.dataset.action = action;
+        button.disabled = action === 'save' && !exportStatus.canSaveCollected;
+        button.addEventListener('click', () => { if (resolveStop(action)) actions.querySelectorAll('button').forEach(node => { node.disabled = true; }); });
+        actions.append(button);
+      }
+      view.append(actions);
+    }
     view.querySelector('.chat-archive-image-access')?.remove();
-    if (state === 'error' && exportStatus?.mediaDiagnostic?.download?.code === 'IMAGE_PERMISSION_REQUIRED') {
+    if (['error', 'decision'].includes(state) && exportStatus?.mediaDiagnostic?.download?.code === 'IMAGE_PERMISSION_REQUIRED') {
       const allow = document.createElement('button'); allow.type = 'button'; allow.className = 'chat-archive-image-access';
       allow.textContent = '[ Allow image access ]';
       allow.addEventListener('click', async () => {
@@ -493,12 +582,21 @@
       view.append(allow);
     }
     view.querySelector('.chat-archive-image-diagnostic')?.remove();
-    if (state === 'error' && exportStatus?.mediaDiagnostic) {
+    if ((['error', 'decision'].includes(state) || exportStatus?.partial) && exportStatus?.mediaDiagnostic) {
       const details = document.createElement('details'); details.className = 'chat-archive-image-diagnostic';
       const summary = document.createElement('summary'); summary.textContent = 'Image diagnostic (no conversation text or URLs)';
       const pre = document.createElement('pre'); pre.textContent = JSON.stringify(exportStatus.mediaDiagnostic, null, 2);
       pre.style.cssText = 'max-height:160px;overflow:auto;white-space:pre-wrap;font-size:11px;user-select:text';
-      details.append(summary, pre); view.append(details);
+      const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = '[ Copy diagnostic ]';
+      copy.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(pre.textContent); copy.textContent = '[ Copied ]'; }
+        catch (_) {
+          const range = document.createRange(); range.selectNodeContents(pre);
+          const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+          copy.textContent = '[ Selected — press Ctrl+C ]';
+        }
+      });
+      details.append(summary, copy, pre); view.append(details);
     }
     view.querySelector('.chat-archive-source-diagnostic')?.remove();
     if (state !== 'running' && exportStatus?.sourceDiagnostic) {
@@ -506,7 +604,16 @@
       const summary = document.createElement('summary'); summary.textContent = 'Direct export diagnostic (no conversation text or URLs)';
       const pre = document.createElement('pre'); pre.textContent = JSON.stringify(exportStatus.sourceDiagnostic, null, 2);
       pre.style.cssText = 'max-height:160px;overflow:auto;white-space:pre-wrap;font-size:11px;user-select:text';
-      details.append(summary, pre); view.append(details);
+      const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = '[ Copy diagnostic ]';
+      copy.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(pre.textContent); copy.textContent = '[ Copied ]'; }
+        catch (_) {
+          const range = document.createRange(); range.selectNodeContents(pre);
+          const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+          copy.textContent = '[ Selected — press Ctrl+C ]';
+        }
+      });
+      details.append(summary, copy, pre); view.append(details);
     }
     // These segments represent loading, collecting, and preparing the file.
     // The site does not tell us the total message count or time remaining.
@@ -517,14 +624,15 @@
     });
     window.ChatArchivePanel?.layout();
     watchAppearance();
+    if (state === 'done' || state === 'error') scheduleProgressDismiss(view);
     return view;
   }
 
   async function runExport(job) {
-    activeExport = true;
+    activeExport = true; pageInterrupted = false;
     cancelRequested = false;
     setPicking(false);
-    exportStatus = { state: 'running', label: 'Preparing export', format: job.format, processed: 0, startedAt: Date.now() };
+    exportStatus = { state: 'running', label: 'Preparing export', phase: 'collecting', format: job.format, processed: 0, startedAt: Date.now() };
     const startUrl = location.href;
     let partSession = null, savingParts = false, savedParts = 0, interrupted = false;
     const sendParts = async request => {
@@ -532,14 +640,39 @@
       if (!result?.ok) throw new Error(result?.error || 'Firefox could not prepare the export parts.');
       return result;
     };
-    const checkParts = () => {
-      if (interrupted || cancelRequested || location.href !== startUrl) throw new Error('Multipart export stopped or the conversation changed.');
+    const checkParts = (allowStopped = false) => {
+      if (interrupted || pageInterrupted || location.href !== startUrl) throw new Error('The conversation changed during export. No further files were saved.');
+      if (!allowStopped) assertConversation();
     };
     const monitor = setInterval(() => {
-      if (!partSession || interrupted || (!cancelRequested && location.href === startUrl)) return;
+      if (interrupted || (!pageInterrupted && location.href === startUrl)) return;
       interrupted = true;
-      browser.runtime.sendMessage({ type: 'EXPORT_PARTS_ABORT', id: partSession }).catch(() => {});
+      if (stopChoice) { const resolve = stopChoice; stopChoice = null; resolve('discard'); }
+      if (partSession) browser.runtime.sendMessage({ type: 'EXPORT_PARTS_ABORT', id: partSession }).catch(() => {});
     }, 100);
+    const chooseStopped = async (data, cause = null) => {
+      checkParts(true);
+      const count = data?.multipart?.messages || data?.messages?.length || 0;
+      Object.assign(exportStatus, { state: 'decision', label: cause?.imageEmbedFailed ? 'Image export interrupted — save what is ready?' : 'Export stopped — save what is ready?', processed: count,
+        ...(cause?.mediaDiagnostic ? { mediaDiagnostic: cause.mediaDiagnostic } : {}),
+        canSaveCollected: count > 0, finishedAt: Date.now(), cancellable: false,
+        stopDetail: (cause?.imageEmbedFailed ? `${cause.message} ` : '') + (count ? `${count} complete messages ready${data.partialExport ? ` of ${data.partialExport.totalMessages}` : ''}.${data.embeddedImages ? ` ${data.embeddedImages} images included.` : ''} ${data.partialExport ? 'The unfinished message is excluded. ' : ''}${savedParts ? `${savedParts} file(s) already saved; those files remain if you discard. ` : ''}Choose Save or Discard.`
+          : 'No complete messages are ready to save. Discard this export to start again.') });
+      const decision = new Promise(resolve => { stopChoice = resolve; });
+      progressView(75, exportStatus.label, 'decision', count);
+      browser.runtime.sendMessage({ type: 'EXPORT_PROGRESS', percent: 75, stage: 'WAIT' }).catch(() => {});
+      const action = await decision;
+      checkParts(true);
+      if (action !== 'save') {
+        Object.assign(exportStatus, { state: 'error', label: savedParts ? `Export discarded. ${savedParts} saved file(s) remain in Downloads.` : 'Export discarded. No files were saved.', finishedAt: Date.now() });
+        progressView(100, exportStatus.label, 'error', count);
+        browser.runtime.sendMessage({ type: 'EXPORT_FAILED', notify: false }).catch(() => {});
+        return false;
+      }
+      cancelRequested = false; delete exportStatus.finishedAt; delete exportStatus.canSaveCollected; delete exportStatus.stopDetail;
+      exportStatus.state = 'running';
+      return true;
+    };
     try {
       const update = (percent, label, processed = 0) => {
         Object.assign(exportStatus, { label, processed });
@@ -547,18 +680,26 @@
         browser.runtime.sendMessage({ type: 'EXPORT_PROGRESS', percent, stage: percent < 20 ? 'LOAD' : percent < 98 ? 'READ' : 'SAVE' }).catch(() => {});
       };
       update(1, 'Preparing export');
-      const onPart = async data => {
-        checkParts();
+      const onPart = async (data, { stopped = false } = {}) => {
+        checkParts(stopped);
         if (!partSession) {
           partSession = (await sendParts({ type: 'EXPORT_PARTS_START', job })).id;
           activePartJobId = partSession;
         }
-        checkParts();
+        checkParts(stopped);
         await sendParts({ type: 'EXPORT_PARTS_STAGE', id: partSession, data });
       };
-      const data = await collectComplete({ ...job.options, outputFormat: job.format, waitForImages: job.format === 'html' || job.format === 'pdf',
-        onPart: ['html', 'pdf'].includes(job.format) ? onPart : undefined }, update);
-      assertConversation();
+      let data;
+      try {
+        data = await collectComplete({ ...job.options, outputFormat: job.format, waitForImages: job.format === 'html' || job.format === 'pdf',
+          onPart: ['html', 'pdf'].includes(job.format) ? onPart : undefined }, update);
+        checkParts();
+      } catch (error) {
+        if (!error.exportStopped && !error.imageEmbedFailed) throw error;
+        data = error.partialData || data || null;
+        if (!await chooseStopped(data, error)) return;
+      }
+      checkParts();
       if (data.url !== location.href) throw new Error('The conversation changed during export. Please retry.');
       if (!data.messages.length && !data.multipart) throw new Error(job.options.selectedOnly ? 'No messages selected.' : 'No messages found.');
       if (job.options.includeTimestamps && !data.multipart) {
@@ -566,40 +707,46 @@
         exportStatus.timestampNotice = ChatArchiveTimestamps.notice(data.messageTimestamps);
       }
       const count = data.multipart?.messages || data.messages.length;
+      exportStatus.phase = 'saving';
       if (data.multipart) {
         checkParts();
-        await sendParts({ type: 'EXPORT_PARTS_SEAL', id: partSession, summary: data.multipart });
+        await sendParts({ type: 'EXPORT_PARTS_SEAL', id: partSession, summary: { ...data.multipart, ...(data.partialExport ? { partialExport: data.partialExport } : {}) } });
+        if (cancelRequested && !await chooseStopped(data)) return;
         if (job.format === 'pdf') {
           update(98, `Opening PDF preview · ${data.multipart.parts} parts`, count);
           await sendParts({ type: 'EXPORT_PARTS_PRINT', id: partSession });
         } else {
           savingParts = true;
           for (let index = 1; index <= data.multipart.parts; index++) {
+            if (cancelRequested && !await chooseStopped(data)) return;
             checkParts();
             update(97, `Saving part ${index} of ${data.multipart.parts} to Downloads`, count);
             await sendParts({ type: 'EXPORT_PARTS_SAVE', id: partSession, index });
             savedParts++;
           }
         }
-        checkParts();
+        checkParts(true); // A Stop during the final completed download cannot undo it.
+        cancelRequested = false;
         partSession = null; activePartJobId = null;
       } else {
         update(98, 'Preparing file', count);
         const result = await browser.runtime.sendMessage({ type: 'EXPORT_READY', job, data });
         if (!result?.ok) throw new Error(result?.error || 'Firefox could not receive the file.');
       }
-      const label = data.multipart ? job.format === 'pdf' ? `Print page opened · ${data.multipart.parts} parts` : `${savedParts} HTML parts saved to Downloads`
-        : job.format === 'pdf' ? 'Print page opened' : 'File sent to Firefox';
-      Object.assign(exportStatus, { state: 'done', label, finishedAt: Date.now() });
+      const label = (data.partialExport ? 'Partial export · ' : '') + (data.multipart ? job.format === 'pdf' ? `Print page opened · ${data.multipart.parts} parts` : `${savedParts} HTML parts saved to Downloads`
+        : job.format === 'pdf' ? 'Print page opened' : 'File sent to Firefox');
+      Object.assign(exportStatus, { state: 'done', label, finishedAt: Date.now(), partial: !!data.partialExport });
       progressView(100, exportStatus.label, 'done', count);
       browser.runtime.sendMessage({ type: 'EXPORT_COMPLETE', format: job.format, parts: data.multipart?.parts || 1,
-        notify: job.options.notifyOnCompletion === true }).catch(() => {});
+        notify: job.options.notifyOnCompletion === true, ...(data.partialExport ? { partial: true } : {}) }).catch(() => {});
     } catch (error) {
+      if (pageInterrupted) return;
       const prefix = savingParts ? `Export incomplete. ${savedParts} part(s) confirmed saved; numbered files may remain in Downloads. ` : '';
       Object.assign(exportStatus, { state: 'error', label: prefix + (error?.message || String(error)), mediaDiagnostic: error?.mediaDiagnostic || null, finishedAt: Date.now() });
       progressView(100, exportStatus.label, 'error', exportStatus.processed);
       browser.runtime.sendMessage({ type: 'EXPORT_FAILED', notify: job.options.notifyOnCompletion === true }).catch(() => {});
     } finally {
+      stopChoice = null;
       clearInterval(monitor);
       if (partSession) await browser.runtime.sendMessage({ type: 'EXPORT_PARTS_ABORT', id: partSession }).catch(() => {});
       activePartJobId = null;
@@ -690,14 +837,23 @@
   });
 
   window.addEventListener('pagehide', () => {
+    pageInterrupted = true;
+    if (activeExport) {
+      cancelRequested = true;
+      Object.assign(exportStatus, { state: 'error', label: 'Export discarded because the source page was closed.', finishedAt: Date.now() });
+      document.querySelector('.chat-archive-progress')?.remove(); window.ChatArchivePanel?.status(null);
+    }
+    if (stopChoice) { const resolve = stopChoice; stopChoice = null; resolve('discard'); }
     if (activePartJobId) browser.runtime.sendMessage({ type: 'EXPORT_PARTS_ABORT', id: activePartJobId }).catch(() => {});
     observer?.disconnect();
     clearInterval(uiTimer); uiTimer = null;
+    clearTimeout(dismissTimer); dismissTimer = null;
   });
   window.addEventListener('pageshow', event => {
     if (event.persisted) {
       if (picking) setPicking(true);
       if (activeExport || document.querySelector('.chat-archive-progress')) watchAppearance();
+      scheduleProgressDismiss(document.querySelector('.chat-archive-progress'));
     }
   });
 
@@ -709,9 +865,10 @@
     if (request.type === 'PANEL_COLLAPSE') { window.ChatArchivePanel?.collapse(); return Promise.resolve({ ok: true }); }
     if (request.type === 'PANEL_SIZE') { window.ChatArchivePanel?.size(request.height); return Promise.resolve({ ok: true }); }
     if (request.type === 'STOP_EXPORT') {
-      if (activeExport && exportStatus?.cancellable !== false) cancelRequested = true;
+      requestStop();
       return Promise.resolve({ ok: true });
     }
+    if (request.type === 'RESOLVE_STOP') return Promise.resolve({ ok: resolveStop(request.action) });
     if (request.type === 'PING') {
       const nodes = window.ChatArchiveExtractor.nodes();
       const metadata = window.ChatArchiveExtractor.metadata();
@@ -734,6 +891,7 @@
       return Promise.resolve({ ok: true, exportStatus: { ...exportStatus } });
     }
   });
+  globalThis.ChatArchiveContentReady = true;
   if (window.ChatArchivePanel) window.ChatArchivePanel.pageTheme = pageTheme;
   window.ChatArchivePanel?.mount();
   window.ChatArchivePanel?.theme(pageTheme());

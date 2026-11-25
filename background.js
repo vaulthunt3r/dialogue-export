@@ -6,6 +6,7 @@ let retainedCharacters = 0;
 let preparingFile = false;
 const partDownloads = new Map();
 const pageImageRequests = new Map();
+const contentConnections = new Map();
 const ownerOf = sender => `${sender.tab?.id ?? 'extension'}:${sender.frameId || 0}`;
 const dataSize = data => data.messages.reduce((sum, message) => sum + ['id', 'text', 'markdown', 'html'].reduce((n, key) => n + (message[key]?.length || 0), 0), 0);
 
@@ -14,10 +15,10 @@ async function notifyExport(request, failed = false) {
   try {
     if (!await browser.permissions.contains({ permissions: ['notifications'] })) return;
     const parts = Number.isSafeInteger(request.parts) && request.parts > 1 ? request.parts : 1;
-    const message = failed ? 'Export stopped. Open Dialogue Export for details.'
+    const message = (request.partial === true ? 'Partial export. ' : '') + (failed ? 'Export stopped. Open Dialogue Export for details.'
       : request.format === 'pdf' ? `PDF layout ready${parts > 1 ? `: ${parts} parts` : ''}. Save from the print page.`
       : request.format === 'html' && parts > 1 ? `${parts} HTML parts saved to Downloads.`
-      : 'File sent to Firefox. Check the save dialog or Downloads.';
+      : 'File sent to Firefox. Check the save dialog or Downloads.');
     await browser.notifications.create('dialogue-export-result', { type: 'basic', iconUrl: browser.runtime.getURL('icons/icon-96.png'), title: 'Dialogue Export', message });
   } catch (_) { /* Permission revocation or OS notification failure cannot fail an export. */ }
 }
@@ -112,12 +113,46 @@ browser.downloads.onChanged.addListener(delta => {
 });
 
 browser.runtime.onMessage.addListener(async (request, sender = {}) => {
-  if (['PAGE_IMAGE_READ', 'PAGE_IMAGE_CANCEL', 'IMAGE_ACCESS_OPEN'].includes(request.type)) {
+  if (request.type === 'ENSURE_CONTENT') {
+    const toolbar = sender.url === browser.runtime.getURL('popup/popup.html');
+    const panel = sender.url === browser.runtime.getURL('popup/popup.html?panel=1');
+    const tabId = panel ? sender.tab?.id : request.tabId;
+    if ((!toolbar && !panel) || !Number.isInteger(tabId)) return { ok: false, code: 'CONNECTION_REJECTED' };
+    if (contentConnections.has(tabId)) return contentConnections.get(tabId);
+    const pending = (async () => {
+      const tab = await browser.tabs.get(tabId);
+      if (!/^https:\/\/(chatgpt\.com|gemini\.google\.com)(\/|$)/i.test(tab.url || '')) return { ok: false, code: 'UNSUPPORTED_PAGE' };
+      let timer;
+      try {
+        const info = await Promise.race([browser.tabs.sendMessage(tabId, { type: 'PING' }, { frameId: 0 }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(Error('CONNECTION_BUSY')), 2500); })]);
+        return { ok: info?.ok === true, code: info?.ok ? undefined : 'CONNECTION_BUSY' };
+      } catch (error) {
+        // A slow or temporarily invalid conversation is not a missing script.
+        // Never re-initialize a running export just because PING timed out.
+        if (!/receiving end|establish connection/i.test(error.message || '')) return { ok: false, code: 'CONNECTION_BUSY' };
+      } finally { clearTimeout(timer); }
+      const entry = browser.runtime.getManifest().content_scripts[0];
+      const target = { tabId, frameIds: [0] };
+      await browser.scripting.insertCSS({ target, files: entry.css });
+      const result = await browser.scripting.executeScript({ target, files: entry.js });
+      if (result.some(item => item.error)) return { ok: false, code: 'CONNECTION_FAILED' };
+      return { ok: true };
+    })().catch(error => ({ ok: false, code: /permission|cannot access|missing host/i.test(error.message || '') ? 'SITE_ACCESS_REQUIRED' : 'CONNECTION_FAILED' }))
+      .finally(() => contentConnections.delete(tabId));
+    contentConnections.set(tabId, pending);
+    return pending;
+  }
+  if (['PAGE_IMAGE_READ', 'PAGE_IMAGE_CANCEL', 'IMAGE_ACCESS_OPEN', 'IMAGE_ACCESS_CHECK'].includes(request.type)) {
     // Only the top-level ChatGPT content script can fetch already-referenced
     // preview images. No general proxy, credentials, redirects or arbitrary host.
     let page, image;
     try { page = new URL(sender.url); } catch (_) { return { ok: false, code: 'IMAGE_REQUEST_REJECTED' }; }
     if (page.origin !== 'https://chatgpt.com' || !Number.isInteger(sender.tab?.id) || (sender.frameId || 0) !== 0) return { ok: false, code: 'IMAGE_REQUEST_REJECTED' };
+    if (request.type === 'IMAGE_ACCESS_CHECK') {
+      try { return { ok: true, granted: await browser.permissions.contains({ origins: ['https://images.openai.com/*'] }) }; }
+      catch (_) { return { ok: false, code: 'IMAGE_RESPONSE_INVALID' }; }
+    }
     if (request.type === 'IMAGE_ACCESS_OPEN') {
       await browser.tabs.create({ url: browser.runtime.getURL('popup/image-access.html') });
       return { ok: true };
@@ -147,6 +182,9 @@ browser.runtime.onMessage.addListener(async (request, sender = {}) => {
       const diagnostic = { code };
       const status = error.imageDiagnostic?.httpStatus;
       if (code === 'IMAGE_HTTP_ERROR' && Number.isInteger(status) && status >= 100 && status <= 599) diagnostic.httpStatus = status;
+      const stage = error.imageDiagnostic?.requestStage, bytes = error.imageDiagnostic?.receivedBytes;
+      if (['request', 'headers', 'body'].includes(stage)) diagnostic.requestStage = stage;
+      if (Number.isInteger(bytes) && bytes >= 0 && bytes <= 8 * 1024 * 1024 + 1) diagnostic.receivedBytes = bytes;
       return { ok: false, code, diagnostic };
     }
     finally { clearTimeout(timer); pageImageRequests.delete(owner); }
@@ -164,7 +202,7 @@ browser.runtime.onMessage.addListener(async (request, sender = {}) => {
       return { ok: true };
     }
     if (request.type === 'PANEL_SEND') {
-      if (!['PING', 'SET_PICKING', 'CLEAR_SELECTION', 'BEGIN_EXPORT', 'STOP_EXPORT', 'PANEL_COLLAPSE'].includes(request.message?.type)) return { ok: false };
+      if (!['PING', 'SET_PICKING', 'CLEAR_SELECTION', 'BEGIN_EXPORT', 'STOP_EXPORT', 'RESOLVE_STOP', 'PANEL_COLLAPSE'].includes(request.message?.type)) return { ok: false };
       return browser.tabs.sendMessage(sender.tab.id, request.message, { frameId: 0 });
     }
     if (!Number.isFinite(request.height)) return { ok: false };
@@ -228,7 +266,7 @@ browser.runtime.onMessage.addListener(async (request, sender = {}) => {
   if (request.type === 'EXPORT_PROGRESS') {
     const value = Math.max(0, Math.min(100, Number(request.percent) || 0));
     await browser.action.setBadgeBackgroundColor({ color: '#111111' });
-    const stage = ['LOAD', 'READ', 'SAVE'].includes(request.stage) ? request.stage : value < 100 ? String(value) : '✓';
+    const stage = ['LOAD', 'READ', 'SAVE', 'WAIT'].includes(request.stage) ? request.stage : value < 100 ? String(value) : '✓';
     await browser.action.setBadgeText({ text: stage });
     return { ok: true };
   }
@@ -257,6 +295,7 @@ browser.runtime.onMessage.addListener(async (request, sender = {}) => {
     preparingFile = true;
     try {
       const { job, data } = request;
+      const filename = data.partialExport ? ChatArchiveParts.partialFilename(job.filename) : job.filename;
       const size = data.messages.reduce((sum, message) => sum + ['id', 'text', 'markdown', 'html'].reduce((n, key) => n + (message[key]?.length || 0), 0) +
         (message.activities || []).reduce((n, activity) => n + ['title', 'text', 'markdown', 'html'].reduce((s, key) => s + (activity[key]?.length || 0), 0), 0), 0);
       checkSize(size);
@@ -264,10 +303,10 @@ browser.runtime.onMessage.addListener(async (request, sender = {}) => {
       const content = ChatArchiveRenderers[renderFormat](data, job.options, job.format === 'pdf');
       checkSize(content.length);
       if (job.format === 'pdf') {
-        await openPrint({ content, filename: job.filename, compactPagination: job.options.compactPagination === true, strictImages: data.collectionMethod === 'chatgpt-api' });
+        await openPrint({ content, filename, compactPagination: job.options.compactPagination === true, strictImages: data.collectionMethod === 'chatgpt-api' });
       } else {
         const mime = { txt: 'text/plain', md: 'text/markdown', html: 'text/html', json: 'application/json' }[job.format];
-        await download(content, mime, job.filename);
+        await download(content, mime, filename);
       }
       await browser.action.setBadgeBackgroundColor({ color: '#111111' });
       await browser.action.setBadgeText({ text: '✓' });

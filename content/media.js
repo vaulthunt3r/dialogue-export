@@ -1,4 +1,5 @@
 (function () {
+  if (globalThis.ChatArchiveMedia) return;
   const maxPixels = 16000000;
   const maxDataLength = 12000000;
   let imageCache = new WeakMap();

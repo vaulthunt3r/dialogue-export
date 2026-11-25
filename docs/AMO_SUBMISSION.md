@@ -1,5 +1,7 @@
 # Mozilla Add-ons submission notes
 
+**0.5.8 is Mozilla-signed (November 25, 2026).** All 46 runtime files match the submitted package, allowing manifest formatting only. The [submission record](AMO_SUBMISSION-v0.5.8.md) covers reproduction, the new `scripting` permission, unchanged host scope, 295 automated tests and the maintainer's successful 66-part image export. Install from the [0.5.8 release](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.8). The exact submitted source is preserved as `Dialogue-Export-v0.5.8-AMO-source.zip`.
+
 **0.5.7 is Mozilla-signed (November 22, 2026).** See [the 0.5.7 submission record](AMO_SUBMISSION-v0.5.7.md) for reviewer notes, reproducible packaging and signed-file verification. All 45 runtime files match the approved submission, allowing manifest formatting only. Install the signed XPI from the [0.5.7 release](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.7). The exact source supplied for review is preserved as `Dialogue-Export-v0.5.7-AMO-source.zip`.
 
 **0.5.6 is Mozilla-signed.** See [the 0.5.6 submission record](AMO_SUBMISSION-v0.5.6.md) for reviewer notes, reproducible packaging and signed-file verification. The exact source originally supplied for review is retained as `Dialogue-Export-v0.5.6-AMO-source.zip`; the public source ZIP adds release documentation and promotional assets without changing the runtime.

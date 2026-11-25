@@ -13,6 +13,23 @@ function fixture() {
 const exportJob = { format: 'html', filename: 'Conversation.html', options: {} };
 const data = (first, count = 1) => ({ title: 'Fixture', messages: Array.from({ length: count }, (_, i) => ({ id: `m${first + i}`, order: first + i, role: 'user', html: `<p>Message ${first + i}</p>` })) });
 
+test('explicit partial sealing validates the prefix and labels even a single retained part', async () => {
+  for (const reason of ['stopped', 'image-error']) {
+    const { store } = fixture(), id = await store.start(exportJob, '1:0');
+    await store.stage(id, '1:0', data(0, 2));
+    for (const partialExport of [{ reason, messages: 1, totalMessages: 5 }, { reason, messages: 2, totalMessages: 2 }, { reason: 'unknown', messages: 2, totalMessages: 5 }]) {
+      await assert.rejects(store.seal(id, '1:0', { parts: 1, messages: 2, partialExport }), /partial export/);
+    }
+    const partialExport = { reason, messages: 2, totalMessages: 5 };
+    await store.seal(id, '1:0', { parts: 1, messages: 2, partialExport });
+    const result = await store.part(id, 1, '1:0');
+    assert.deepEqual(JSON.parse(JSON.stringify(result.data.partialExport)), partialExport);
+    assert.equal(result.job.filename, 'Conversation-partial-part-001-of-001.html');
+    assert.equal(result.data.exportPart.last, 2);
+    await store.remove(id);
+  }
+});
+
 test('disk parts are ordered, owned by their tab and unavailable until the full export is sealed', async () => {
   const { store } = fixture(), id = await store.start(exportJob, '1:0');
   await store.stage(id, '1:0', data(0, 2));

@@ -1,4 +1,5 @@
 (function () {
+  if (globalThis.ChatArchiveApiMedia) return;
   const maxImageBytes = 8 * 1024 * 1024;
   const maxOutputCharacters = 16 * 1024 * 1024;
   const maxImagePixels = 16 * 1024 * 1024;
@@ -8,14 +9,73 @@
     error.imageDiagnostic = { code, ...details };
     return error;
   }
+  const bridgeFailureCodes = new Set(['IMAGE_HTTP_ERROR', 'IMAGE_BODY_UNAVAILABLE', 'IMAGE_SIZE_LIMIT', 'IMAGE_TIMEOUT',
+    'IMAGE_ABORTED', 'IMAGE_NETWORK_ERROR', 'IMAGE_FORMAT_UNSUPPORTED', 'IMAGE_DECODE_FAILED', 'IMAGE_PERMISSION_REQUIRED',
+    'IMAGE_REQUEST_REJECTED', 'IMAGE_FETCH_BUSY', 'IMAGE_FETCH_FAILED']);
+  function previewBridgeUrl(value) {
+    if (location.origin !== 'https://chatgpt.com' || typeof globalThis.browser?.runtime?.sendMessage !== 'function') return null;
+    try {
+      const url = new URL(value);
+      return url.origin === 'https://images.openai.com' && !url.username && !url.password &&
+        /^\/(?:static-rsc-\d+\/|thumbnails\/)/.test(url.pathname) ? url.href : null;
+    } catch (_) { return null; }
+  }
+  async function loadPreview(url, { signal, check }) {
+    check();
+    if (signal.aborted) throw imageFailure('IMAGE_ABORTED', 'Image preparation interrupted.');
+    const id = crypto.randomUUID();
+    let timer, abort, stopped = false;
+    const cancel = () => { browser.runtime.sendMessage({ type: 'PAGE_IMAGE_CANCEL', id }).catch(() => {}); };
+    try {
+      const interrupted = new Promise((_, reject) => {
+        const stop = (code, message) => {
+          if (stopped) return;
+          stopped = true; cancel(); reject(imageFailure(code, message, { transport: 'extension' }));
+        };
+        abort = () => stop('IMAGE_ABORTED', 'Image preparation interrupted.');
+        signal.addEventListener('abort', abort, { once: true });
+        timer = setTimeout(() => stop('IMAGE_TIMEOUT', 'The image download timed out.'), 70000);
+      });
+      const response = await Promise.race([browser.runtime.sendMessage({ type: 'PAGE_IMAGE_READ', id, url }), interrupted]);
+      check();
+      if (signal.aborted) throw imageFailure('IMAGE_ABORTED', 'Image preparation interrupted.');
+      if (!response?.ok) {
+        const code = bridgeFailureCodes.has(response?.code) ? response.code : 'IMAGE_RESPONSE_INVALID';
+        const details = { transport: 'extension' }, diagnostic = response?.diagnostic;
+        if (Number.isInteger(diagnostic?.httpStatus) && diagnostic.httpStatus >= 100 && diagnostic.httpStatus <= 599) details.httpStatus = diagnostic.httpStatus;
+        if (['request', 'headers', 'body'].includes(diagnostic?.requestStage)) details.requestStage = diagnostic.requestStage;
+        if (Number.isInteger(diagnostic?.receivedBytes) && diagnostic.receivedBytes >= 0 && diagnostic.receivedBytes <= maxImageBytes + 1) details.receivedBytes = diagnostic.receivedBytes;
+        throw imageFailure(code, code === 'IMAGE_PERMISSION_REQUIRED' ? 'Firefox has not granted image access. Click Allow image access, then retry.' : 'The extension could not prepare the image.', details);
+      }
+      const image = response.image;
+      // Only the extension background produces this reply. Validate its bounded
+      // shape before embedding; byte format and decoding are checked there.
+      if (!image || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'].includes(image.type) ||
+          typeof image.src !== 'string' || !image.src.startsWith(`data:${image.type};base64,`) ||
+          !/^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(image.src) ||
+          image.src.length > Math.ceil(maxImageBytes / 3) * 4 + 64 ||
+          !Number.isInteger(image.width) || !Number.isInteger(image.height) || image.width <= 0 || image.height <= 0 || image.width * image.height > maxImagePixels) {
+        throw imageFailure('IMAGE_RESPONSE_INVALID', 'The extension returned an invalid image.', { transport: 'extension' });
+      }
+      return { src: image.src, type: image.type, width: image.width, height: image.height };
+    } catch (error) {
+      if (error.imageDiagnostic) throw error;
+      check();
+      throw imageFailure(signal.aborted ? 'IMAGE_ABORTED' : 'IMAGE_RESPONSE_INVALID', 'The image request was interrupted or unavailable.', { transport: 'extension' });
+    } finally {
+      clearTimeout(timer); if (abort) signal.removeEventListener('abort', abort);
+    }
+  }
   const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   function allowedUrl(value) {
-    const url = new URL(value, location.origin);
+    let url;
+    try { url = new URL(value, location.origin); }
+    catch (_) { throw imageFailure('IMAGE_URL_UNSUPPORTED', 'The image URL is not supported for direct export.'); }
     if (url.origin === location.origin && url.pathname.startsWith('/backend-api/')) return url;
     if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') ||
         !url.hostname.includes('.') || /^(?:localhost|127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(url.hostname) ||
         url.hostname.endsWith('.local') || url.hostname.endsWith('.localhost') || url.hostname.includes(':')) {
-      throw new Error('The image URL is not supported for direct export.');
+      throw imageFailure('IMAGE_URL_UNSUPPORTED', 'The image URL is not supported for direct export.');
     }
     return url;
   }
@@ -109,8 +169,9 @@
   async function download(value, { signal, token, check }) {
     if (value.startsWith('data:')) {
       const match = value.match(/^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,([A-Za-z0-9+/=\s]+)$/);
-      if (!match || match[1].length > Math.ceil(maxImageBytes * 4 / 3) + 4) throw new Error('The embedded image is invalid or too large.');
-      return Uint8Array.from(atob(match[1]), character => character.charCodeAt(0));
+      if (!match || match[1].length > Math.ceil(maxImageBytes * 4 / 3) + 4) throw imageFailure('IMAGE_DATA_INVALID', 'The embedded image is invalid or too large.');
+      try { return Uint8Array.from(atob(match[1]), character => character.charCodeAt(0)); }
+      catch (_) { throw imageFailure('IMAGE_DATA_INVALID', 'The embedded image is invalid.'); }
     }
     const url = allowedUrl(value), local = url.origin === location.origin;
     const controller = new AbortController();
@@ -119,21 +180,27 @@
     if (signal.aborted) controller.abort();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; abort(); }, 60000);
-    let reader;
+    let reader, requestStage = 'request', receivedBytes = 0;
     try {
       check();
       const response = await fetch(url.href, { method: 'GET', credentials: local ? 'include' : 'omit', redirect: 'error',
         referrerPolicy: 'no-referrer', signal: controller.signal, headers: local && token ? { authorization: `Bearer ${token}` } : {} });
-      if (!response.ok) throw imageFailure('IMAGE_HTTP_ERROR', 'The image server rejected the download.', { httpStatus: response.status });
+      requestStage = 'headers';
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw imageFailure('IMAGE_HTTP_ERROR', 'The image server rejected the download.', { httpStatus: response.status });
+      }
       if (!response.body?.getReader) throw imageFailure('IMAGE_BODY_UNAVAILABLE', 'The image response body is unavailable.');
       if (Number(response.headers.get('content-length')) > maxImageBytes) { await response.body.cancel(); throw imageFailure('IMAGE_SIZE_LIMIT', 'The image exceeds the download limit.'); }
       reader = response.body.getReader();
+      requestStage = 'body';
       const chunks = []; let count = 0;
       for (;;) {
         check();
         const { value, done } = await reader.read();
         if (done) break;
         count += value.length;
+        receivedBytes = count;
         if (count > maxImageBytes) throw imageFailure('IMAGE_SIZE_LIMIT', 'The image exceeds the download limit.');
         chunks.push(value);
       }
@@ -142,8 +209,11 @@
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
       return bytes;
     } catch (error) {
-      if (timedOut) throw imageFailure('IMAGE_TIMEOUT', 'The image download timed out.');
-      throw error;
+      const details = { requestStage, receivedBytes: Math.min(receivedBytes, maxImageBytes + 1) };
+      if (signal.aborted) throw imageFailure('IMAGE_ABORTED', 'Image preparation interrupted.', details);
+      if (timedOut) throw imageFailure('IMAGE_TIMEOUT', 'The image download timed out.', details);
+      if (error.imageDiagnostic) { Object.assign(error.imageDiagnostic, details); throw error; }
+      throw imageFailure('IMAGE_NETWORK_ERROR', 'The image request failed.', details);
     } finally {
       await reader?.cancel().catch(() => {}); reader?.releaseLock();
       clearTimeout(timer); signal.removeEventListener('abort', abort); controller.abort();
@@ -151,6 +221,11 @@
   }
 
   async function loadImage(url, { signal, token = null, check = () => {} }) {
+    // MV3 content-script fetch remains subject to page CORS even with a host
+    // permission. Reuse the existing, narrowly scoped preview background reader.
+    // Background pages do not take this branch, so it cannot recurse.
+    const previewUrl = previewBridgeUrl(url);
+    if (previewUrl) return loadPreview(previewUrl, { signal, check });
     let bytes, image;
     try { bytes = await download(url, { signal, token, check }); }
     catch (error) {
@@ -167,7 +242,67 @@
     return { width: image.width, height: image.height, type: image.type, src: dataUrl(image) };
   }
 
+  async function waitRetry(milliseconds, signal, check) {
+    check();
+    let timer, abort;
+    try {
+      await new Promise((resolve, reject) => {
+        abort = () => reject(imageFailure('IMAGE_ABORTED', 'Image preparation interrupted.'));
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+        else timer = setTimeout(resolve, milliseconds);
+      });
+    } catch (error) { check(); throw error; }
+    finally { clearTimeout(timer); if (abort) signal.removeEventListener('abort', abort); }
+    check();
+  }
+
+  async function checkPreviewAccess(data, { signal, check, onProgress }) {
+    let total = 0, needed = null;
+    for (let position = 0; position < data.messages.length; position++) {
+      for (const entry of data.messages[position].media || []) {
+        total++;
+        if (!needed && !entry.source.pointer && previewBridgeUrl(entry.source.url)) needed = { image: total, messagePosition: position + 1 };
+      }
+    }
+    if (!needed) return;
+    check();
+    onProgress(70, 'Checking image access', 0);
+    let timer, abort, response;
+    try {
+      const interrupted = new Promise((_, reject) => {
+        abort = () => reject(imageFailure('IMAGE_ABORTED', 'Image preparation interrupted.'));
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+        timer = setTimeout(() => reject(imageFailure('IMAGE_RESPONSE_INVALID', 'Image access check timed out.')), 5000);
+      });
+      response = await Promise.race([browser.runtime.sendMessage({ type: 'IMAGE_ACCESS_CHECK' }), interrupted]);
+      check();
+    } catch (error) {
+      check();
+      if (signal.aborted) throw error;
+    } finally { clearTimeout(timer); if (abort) signal.removeEventListener('abort', abort); }
+    if (response?.ok === true && response.granted === true) return;
+    const denied = response?.ok === true && response.granted === false;
+    const error = new Error(denied
+      ? 'Image access is required before export. Click Allow image access, then start the export again. No images were downloaded.'
+      : 'Could not check image access. Reload the extension and retry. No images were downloaded.');
+    error.mediaDiagnostic = { version: 5, phase: 'permission', ...needed, total, referenceKind: 'url', attempts: 0,
+      download: { code: denied ? 'IMAGE_PERMISSION_REQUIRED' : 'IMAGE_RESPONSE_INVALID', transport: 'extension' } };
+    // This happens before modifying/staging messages or resolving file pointers.
+    // No partial-save decision is needed: there is no prepared prefix to lose.
+    throw error;
+  }
+
+  function retryable(error, phase, refreshable) {
+    const code = error.imageDiagnostic?.code, status = error.imageDiagnostic?.httpStatus;
+    if (['IMAGE_NETWORK_ERROR', 'IMAGE_TIMEOUT'].includes(code)) return true;
+    if (!['IMAGE_HTTP_ERROR', 'IMAGE_REFERENCE_UNAVAILABLE'].includes(code)) return false;
+    return [408, 429, 500, 502, 503, 504].includes(status) || phase === 'download' && refreshable && [401, 403].includes(status);
+  }
+
   async function embed(data, { resolvePointer, signal, token, check, onProgress, onPart }) {
+    await checkPreviewAccess(data, { signal, check, onProgress });
     const cache = new Map();
     // Leave room for document wrappers and message labels below the background
     // 16 Mi-character ceiling. At most one part plus one message is prepared.
@@ -175,24 +310,30 @@
     const messageLimit = onPart ? 15 * 1024 * 1024 : maxOutputCharacters;
     const source = data.messages, messageCount = source.length;
     let partMessages = [], characters = 0, pixels = 0, occurrences = 0, processed = 0, parts = 0;
+    let completedMessages = 0, completedImages = 0;
     const total = data.messages.reduce((sum, m) => sum + (m.media?.length || 0), 0);
     if (!onPart && total > 128) throw new Error('This export has too many images for a single file. No partial file was saved.');
     if (total) data.imageExport = { originalVerified: false, rasterReencoded: false };
     const metadata = { ...data }; delete metadata.messages;
     data.messages = [];
-    const flush = async () => {
+    const flush = async (stopped = false) => {
+      if (!partMessages.length) return;
       if (!onPart) throw new Error('Images exceed the single-file export memory limit. No partial file was saved.');
-      check();
-      await onPart({ ...metadata, messages: partMessages });
-      check();
+      if (!stopped) check();
+      await onPart({ ...metadata, messages: partMessages }, { stopped });
+      // Commit the acknowledged part before the next cancellation check, so
+      // stopping during a disk write cannot stage the same messages twice.
       parts++; partMessages = []; characters = 0; pixels = 0; occurrences = 0; cache.clear();
+      // The next message may already be fully embedded when it triggers this
+      // flush. Let the caller commit it before the next cancellation check.
     };
     try {
       for (let index = 0; index < source.length; index++) {
         const message = source[index];
         source[index] = null; // Staged messages must not remain reachable here.
         const prepared = new Map();
-        let messageCharacters = (message.html?.length || 0) + (message.id?.length || 0) + 256;
+        let messageCharacters = (message.html?.length || 0) + (message.id?.length || 0) + 256 +
+          (message.activities || []).reduce((sum, activity) => sum + ['title', 'text', 'markdown', 'html'].reduce((n, key) => n + (activity[key]?.length || 0), 0), 0);
         const messageOccurrences = message.media?.length || 0;
         if (messageOccurrences > 128) throw new Error('One message contains too many images for a part. No file was saved.');
         for (const entry of message.media || []) {
@@ -204,12 +345,37 @@
           if (typeof key !== 'string' || !key) throw new Error('An image has no downloadable reference. No file was saved.');
           let image = prepared.get(key) || cache.get(key);
           if (!image) {
-            try {
-              const url = entry.source.pointer || reference.startsWith('sandbox:') ? await resolvePointer(reference, message.id) : reference;
-              image = await loadImage(url, { signal, token, check });
-            } catch (_) {
-              check();
-              throw new Error(`Image ${processed + 1} of ${total} could not be embedded (unavailable, unsupported, or over the image limit). No file was saved. Text export is still available.`);
+            const refreshable = !!entry.source.pointer || reference.startsWith('sandbox:');
+            const referenceKind = ['sediment', 'file-service', 'sandbox'].find(kind => reference.startsWith(`${kind}:`)) || (reference.startsWith('data:') ? 'embedded' : 'url');
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              let phase = refreshable ? 'reference' : 'download';
+              try {
+                // Resolve again on every attempt: a signed download URL may
+                // have expired. Completed images and staged parts stay intact.
+                const url = refreshable ? await resolvePointer(reference, message.id) : reference;
+                phase = 'download';
+                image = await loadImage(url, { signal, token, check });
+                break;
+              } catch (error) {
+                check();
+                if (attempt < 3 && retryable(error, phase, refreshable)) {
+                  onProgress(75 + Math.round(processed / Math.max(1, total) * 20), `Retrying image ${processed + 1}/${total} · attempt ${attempt + 1}/3`, messageCount);
+                  await waitRetry(attempt === 1 ? 500 : 1500, signal, check);
+                  continue;
+                }
+                const known = ['IMAGE_HTTP_ERROR', 'IMAGE_NETWORK_ERROR', 'IMAGE_TIMEOUT', 'IMAGE_BODY_UNAVAILABLE', 'IMAGE_SIZE_LIMIT', 'IMAGE_FORMAT_UNSUPPORTED', 'IMAGE_DECODE_FAILED', 'IMAGE_ABORTED', 'IMAGE_REFERENCE_UNAVAILABLE', 'IMAGE_REFERENCE_UNSUPPORTED', 'IMAGE_URL_UNSUPPORTED', 'IMAGE_DATA_INVALID', ...bridgeFailureCodes, 'IMAGE_RESPONSE_INVALID'];
+                const code = known.includes(error.imageDiagnostic?.code) ? error.imageDiagnostic.code : phase === 'reference' ? 'IMAGE_REFERENCE_UNAVAILABLE' : 'IMAGE_FETCH_FAILED';
+                const status = error.imageDiagnostic?.httpStatus;
+                const diagnostic = { code, ...(Number.isInteger(status) && status >= 100 && status <= 599 ? { httpStatus: status } : {}) };
+                const stage = error.imageDiagnostic?.requestStage, bytes = error.imageDiagnostic?.receivedBytes;
+                if (['request', 'headers', 'body', 'metadata'].includes(stage)) diagnostic.requestStage = stage;
+                if (Number.isInteger(bytes) && bytes >= 0 && bytes <= maxImageBytes + 1) diagnostic.receivedBytes = bytes;
+                if (error.imageDiagnostic?.transport === 'extension') diagnostic.transport = 'extension';
+                const failure = new Error(`Image ${processed + 1} of ${total} could not be embedded (${code}${diagnostic.httpStatus ? `, HTTP ${diagnostic.httpStatus}` : ''}; ${attempt} attempt${attempt > 1 ? 's' : ''}). No file was saved yet.`);
+                failure.imageEmbedFailed = true;
+                failure.mediaDiagnostic = { version: 4, phase, image: processed + 1, total, messagePosition: index + 1, referenceKind, attempts: attempt, download: diagnostic };
+                throw failure;
+              }
             }
           }
           prepared.set(key, image);
@@ -231,6 +397,7 @@
         }
         for (const [key, image] of prepared) cache.set(key, image);
         partMessages.push(message); characters += messageCharacters; pixels += newPixels; occurrences += messageOccurrences;
+        completedMessages++; completedImages += messageOccurrences;
       }
       check();
       if (total) data.embeddedImages = processed;
@@ -239,6 +406,22 @@
         data.multipart = { parts, messages: messageCount };
       } else data.messages = partMessages;
       return data;
+    } catch (error) {
+      if (error.exportStopped === true || error.imageEmbedFailed === true) {
+        // Only fully prepared messages belong to the snapshot. The current
+        // message may contain unresolved images and must never be handed off.
+        if (parts) {
+          try { await flush(true); }
+          catch (storageError) { storageError.partialRecoveryFailed = true; throw storageError; }
+          data.messages = []; data.multipart = { parts, messages: completedMessages };
+        } else data.messages = partMessages;
+        if (completedMessages) {
+          data.embeddedImages = completedImages;
+          if (completedMessages < messageCount) data.partialExport = { reason: error.exportStopped ? 'stopped' : 'image-error', messages: completedMessages, totalMessages: messageCount };
+          error.partialData = data;
+        }
+      }
+      throw error;
     } finally { cache.clear(); }
   }
   window.ChatArchiveApiMedia = { embed, inspect, allowedUrl, loadImage };

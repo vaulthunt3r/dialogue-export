@@ -1,5 +1,6 @@
 /* Read-only, explicitly started history sessions. Credentials never leave this script. */
 (function () {
+  if (globalThis.ChatArchiveHistory) return;
   const origin = 'https://chatgpt.com';
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   // Only fixed categories cross into reports; never forward arbitrary exception text.

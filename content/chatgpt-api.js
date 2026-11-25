@@ -1,4 +1,5 @@
 (function () {
+  if (globalThis.ChatArchiveApi) return;
   // A separate, on-demand reader for saved ChatGPT conversations. No page-world
   // injection, persistent token storage or intercepted requests.
   const maxResponseBytes = 32 * 1024 * 1024;
@@ -49,7 +50,7 @@
 
   function eligible(options) {
     return location.origin === 'https://chatgpt.com' && !options.selectedOnly &&
-      ['txt', 'md', 'html', 'pdf'].includes(options.outputFormat);
+      ['txt', 'md', 'html', 'pdf', 'json'].includes(options.outputFormat);
   }
 
   async function readJson(response, limit, check) {
@@ -144,6 +145,40 @@
   }
 
   const labelText = value => String(value || '').replace(/[\[\]\\\r\n]/g, ' ');
+  const imageReferenceTypes = ['image', 'images', 'image_v2', 'image_group'];
+  // Only fixed categories, field presence and counts leave the parser. Never
+  // copy marker payloads, unknown type names, labels, URLs or reference IDs.
+  function referenceStructure(message, options, token, hasLayout = false) {
+    const category = (value, allowed) => allowed.includes(value) ? value : value == null ? 'unset' : 'other';
+    const refs = Array.isArray(message.metadata?.content_references) ? message.metadata.content_references : [];
+    const matching = refs.filter(ref => ref?.matched_text === token);
+    const fields = ['type', 'matched_text', 'items', 'fallback_items', 'safe_urls', 'images', 'url', 'href', 'name', 'alt', 'entity_data', 'image_url', 'content_url', 'original_content_url', 'thumbnail_url', 'asset_pointer', 'file_id', 'title', 'citation_format', 'image_result', 'image_search_query'];
+    const present = value => value && typeof value === 'object' ? fields.filter(key => Object.hasOwn(value, key)) : [];
+    const describe = ref => ({
+      type: category(ref?.type, ['webpage', 'webpages', 'grouped_webpages', 'entity', 'file', 'image', 'images', 'image_v2', 'image_gen', 'image_group', 'citation', 'code', 'video', 'navlist', 'filenavlist', 'finance', 'weather', 'sports', 'product', 'products']),
+      matches: ref?.matched_text === token,
+      fields: present(ref),
+      items: Array.isArray(ref?.items) ? ref.items.length : 0,
+      fallbackItems: Array.isArray(ref?.fallback_items) ? ref.fallback_items.length : 0,
+      images: Array.isArray(ref?.images) ? ref.images.length : 0,
+      firstItemFields: present(ref?.items?.[0]),
+      firstImageFields: present(ref?.images?.[0]),
+      firstImageResultFields: present(ref?.images?.[0]?.image_result)
+    });
+    const sample = [...matching.slice(0, 6), ...refs.filter(ref => ref?.matched_text !== token).slice(0, 6)].slice(0, 8);
+    const marker = typeof token === 'string' ? token.slice(1, -1).split('\uE202') : [];
+    return {
+      version: 2, reason: 'unsupported-rich-reference',
+      context: category(message.author?.role, ['user', 'assistant', 'activity', 'tool']),
+      format: category(options.outputFormat, ['txt', 'md', 'html', 'pdf', 'json']),
+      marker: category(marker[0], ['cite', 'url', 'image', 'image_group', 'image_gen', 'entity', 'navlist', 'filenavlist', 'video', 'finance', 'weather', 'sports', 'product', 'products', 'file', 'download', 'table', 'map']),
+      markerParts: marker.length, hasLayout,
+      referenceCount: refs.length, matchingReferenceCount: matching.length,
+      referencesTruncated: refs.length > sample.length,
+      references: sample.map(describe)
+    };
+  }
+
   function referenceText(ref, markdown, includeLinks, addImage) {
     const items = [...(Array.isArray(ref.items) ? ref.items : []), ...(Array.isArray(ref.fallback_items) ? ref.fallback_items : [])];
     if (['webpage', 'webpages', 'grouped_webpages'].includes(ref.type)) {
@@ -160,15 +195,22 @@
     }
     if (ref.type === 'entity' && (ref.name || ref.entity_data?.name)) return labelText(ref.name || ref.entity_data.name);
     if (ref.type === 'file' && (ref.name || ref.alt)) return `[File: ${labelText(ref.name || ref.alt)}]`;
-    if (['image', 'images', 'image_v2'].includes(ref.type)) {
+    if (imageReferenceTypes.includes(ref.type)) {
       if (!addImage) return '[Image gallery; image data is not included in this text export.]';
       if (!Array.isArray(ref.images) || !ref.images.length) fallback('This image gallery needs collection from the page.');
-      return ref.images.map(image => addImage({ url: image.content_url || image.original_content_url || image.thumbnail_url || image.image_url || image.url }, image.title || image.alt || 'Image')).join('\n\n');
+      return ref.images.map(entry => {
+        // image_group wraps each search result; the exact matched marker binds
+        // the gallery to this message. Queries and safe_urls are not images.
+        const image = ref.type === 'image_group' ? entry?.image_result ?? entry : entry;
+        if (!image || typeof image !== 'object' || Array.isArray(image)) fallback('An image has no downloadable reference.');
+        const url = window.ChatArchiveMarkdown.referenceImageUrl(image, ref.type !== 'image_group');
+        return addImage({ url }, image.title || image.alt || 'Image');
+      }).join('\n\n');
     }
     return null;
   }
 
-  function messageContent(message, options, assets = []) {
+  function messageContent(message, options, assets = [], warnings = null) {
     const rich = ['html', 'pdf'].includes(options.outputFormat);
     const imagesEnabled = (message.author?.role === 'user' ? options.includeUserImages : options.includeAssistantImages) !== false;
     const usedImages = new Set();
@@ -189,28 +231,57 @@
       if (part?.content_type === 'file_asset_pointer') return `[File attachment: ${labelText(part.name || part.filename || 'file')}]`;
       fallback('This attachment type needs collection from the page.');
     });
+    let source = chunks.join('\n');
+    // Recognize layout notation outside literal code. The static renderer uses
+    // saved values and exact references; it never executes component source.
+    let hasLayout = false;
+    if (rich && message.author?.role === 'assistant') mapProse(source, prose => {
+      // Component names identify the rendered UI even without attributes, or
+      // when a different attribute comes first. Cite is case-sensitive here:
+      // lowercase <cite> is ordinary HTML that the Markdown renderer escapes.
+      if (/<(?:AsyncImage|Entity|card|box|row|column|grid|badge|text|caption|divider|spacer|svg)(?=[\s/>])/i.test(prose) || /<Cite(?=[\s/>])/.test(prose)) {
+        hasLayout = true;
+        if (!window.ChatArchiveComponents) fallback('This rich content needs collection from the page.', null, true);
+      }
+      return prose;
+    });
     const markdown = options.outputFormat === 'md' || rich;
     const references = new Map();
     const contentReferences = message.metadata?.content_references || [];
     if (!Array.isArray(contentReferences)) fallback('This reference format needs collection from the page.');
     for (const ref of contentReferences) {
       if (typeof ref?.matched_text !== 'string' || !ref.matched_text.startsWith('\uE200')) continue;
-      if (rich && !imagesEnabled && ['image', 'images', 'image_v2'].includes(ref.type)) { references.set(ref.matched_text, ''); continue; }
-      const value = referenceText(ref, markdown, options.includeLinks !== false, rich ? addImage : null);
+      if (rich && !imagesEnabled && imageReferenceTypes.includes(ref.type)) { references.set(ref.matched_text, ''); continue; }
+      let value;
+      try { value = referenceText(ref, markdown, options.includeLinks !== false, rich ? addImage : null); }
+      catch (error) {
+        if (error instanceof PageFallback && !error.sourceDiagnostic) error.sourceDiagnostic = referenceStructure(message, options, ref.matched_text, hasLayout);
+        throw error;
+      }
       if (value !== null) references.set(ref.matched_text, value);
     }
-    let source = chunks.join('\n');
-    // These are ChatGPT UI components, not HTML or ordinary Markdown. Their
-    // image queries cannot reconstruct the images actually shown on the page.
-    // Keep literal code examples intact; read rendered cards for visual exports.
-    if (rich && message.author?.role === 'assistant') mapProse(source, prose => {
-      if (/<(?:AsyncImage|Entity)\b[^>]*\/?\s*>|<(?:box|row|badge|text|divider)\s+(?:gap|align|flex|color|size)\s*=/i.test(prose)) {
-        fallback('This rich content needs collection from the page.', null, true);
-      }
-      return prose;
-    });
     source = mapProse(source, prose => prose.replace(/\uE200[^\uE201]*\uE201/g, token => {
-      if (!references.has(token)) fallback('This rich content needs collection from the page.');
+      // Some saved text uses an explicit label/URL marker. Its destination is
+      // self-contained; no source-page or image-query inference is necessary.
+      if (!references.has(token) && token.startsWith('\uE200url\uE202')) {
+        const parts = token.slice(1, -1).split('\uE202');
+        const target = parts[2];
+        let url;
+        try { if (parts.length === 3 && /^https?:\/\//i.test(target) && !/[\s<>\u0000-\u001f]/.test(target)) url = new URL(target); } catch (_) {}
+        if (url && !url.username && !url.password) {
+          const label = labelText(parts[1] || url.href);
+          if (options.includeLinks === false) return label;
+          return markdown ? `[${label}](<${url.href}>)` : `${label} (${url.href})`;
+        }
+      }
+      // A citation with no saved reference has no recoverable destination.
+      // Preserve the surrounding text and explicitly label the missing link,
+      // as the static card renderer does. Unknown matched content still fails.
+      if (!references.has(token) && token.startsWith('\uE200cite\uE202') && !contentReferences.some(ref => ref?.matched_text === token)) {
+        if (warnings) warnings.unavailableCitations++;
+        return '[Source link unavailable]';
+      }
+      if (!references.has(token)) fallback('This rich content needs collection from the page.', referenceStructure(message, options, token, hasLayout), hasLayout);
       return references.get(token);
     }));
     const attachments = message.metadata?.attachments;
@@ -235,19 +306,65 @@
     }, !markdown);
   }
 
-  function normalize(raw, url, options, visibleIds = []) {
+  function savedActivity(message, options, warnings) {
+    if (!options.includeActivity || message.author?.role !== 'assistant' || message.metadata?.is_visually_hidden_from_conversation ||
+        (message.recipient && message.recipient !== 'all')) return [];
+    const content = message.content || {}, metadata = message.metadata || {};
+    let entries = [];
+    if (content.content_type === 'thoughts') {
+      if (!Array.isArray(content.thoughts) || !content.thoughts.length) {
+        entries = [{ title: 'Thinking', value: 'The saved conversation does not contain the text of this activity section.' }];
+      } else entries = content.thoughts.map(thought => {
+        if (!thought || (thought.content != null && typeof thought.content !== 'string') || (thought.summary != null && typeof thought.summary !== 'string')) {
+          fallback('This saved activity format is not supported.');
+        }
+        return { title: thought.summary?.trim() || 'Thinking', value: thought.content || '' };
+      });
+    } else if (content.content_type === 'text' && (message.channel === 'commentary' || metadata.is_thinking_preamble_message === true)) {
+      if (!Array.isArray(content.parts) || content.parts.some(part => typeof part !== 'string')) fallback('This saved activity format is not supported.');
+      entries = [{ title: 'Working', value: content.parts.join('\n') }];
+    }
+    // Raw tool calls, analysis-channel text and reasoning_recap service records
+    // are not the user-facing Working/Thinking sections.
+    return entries.map(({ title, value }) => {
+      const activityMessage = { author: { role: 'activity' }, content: { content_type: 'text', parts: [value] }, metadata: { content_references: metadata.content_references || [] } };
+      const base = { ...options, includeAssistantImages: false };
+      const markdown = messageContent(activityMessage, { ...base, outputFormat: 'md' }, [], warnings);
+      const text = messageContent(activityMessage, { ...base, outputFormat: 'txt' });
+      const html = window.ChatArchiveMarkdown ? window.ChatArchiveMarkdown.render(messageContent(activityMessage, { ...base, outputFormat: 'html' }),
+        { includeLinks: options.includeLinks !== false, includeImages: false }).html : '';
+      if (['html', 'pdf'].includes(options.outputFormat) && !window.ChatArchiveMarkdown) throw new Error('The HTML renderer is unavailable. Reload the conversation tab.');
+      return { title, expanded: true, text, markdown, html };
+    });
+  }
+
+  function normalize(raw, url, options, visibleIds = [], renderedMessage = null) {
     const path = activePath(raw, conversationId(url));
     const pathIds = new Set(path.map(node => node.message?.id).filter(Boolean));
     if (visibleIds.some(id => !pathIds.has(id))) fallback('The displayed branch differs from the server branch.');
-    const rich = ['html', 'pdf'].includes(options.outputFormat);
-    const records = [], messages = [], seen = new Set(), assistantImages = new Map();
-    let size = 0, turn = 0;
-    for (const node of path) {
+    const jsonExport = options.outputFormat === 'json', rich = ['html', 'pdf', 'json'].includes(options.outputFormat);
+    const contentOptions = jsonExport ? { ...options, outputFormat: 'md' } : options;
+    const records = [], messages = [], seen = new Set(), assistantImages = new Map(), activityByTurn = new Map();
+    const referenceWarnings = { unavailableCitations: 0 };
+    let size = 0, turn = 0, componentMessages = 0, unavailableCitations = 0;
+    for (const [pathIndex, node] of path.entries()) {
       const message = node.message;
       if (!message) continue;
       const role = message.author?.role, meta = message.metadata || {};
       if (role === 'user') turn++;
-      const generated = rich && role === 'tool';
+      const activities = savedActivity(message, options, referenceWarnings);
+      if (activities.length) {
+        if (message.status && message.status !== 'finished_successfully') fallback('Wait for the activity to finish before direct export.');
+        if (typeof message.id !== 'string' || !message.id || seen.has(message.id)) fallback('Message identifiers in the response are ambiguous.');
+        seen.add(message.id);
+        if (!activityByTurn.has(turn)) activityByTurn.set(turn, { id: message.id, index: pathIndex, createTime: message.create_time, activities: [] });
+        activityByTurn.get(turn).activities.push(...activities);
+        size += activities.reduce((sum, activity) => sum + activity.title.length + activity.text.length + activity.markdown.length + activity.html.length, 0);
+        if (size > maxOutputCharacters) throw new Error('This export exceeds the content memory limit. No partial file was saved.');
+        continue;
+      }
+      if (['thoughts', 'reasoning_recap'].includes(message.content?.content_type)) continue;
+      const generated = rich && !jsonExport && role === 'tool';
       if (generated && options.includeAssistantImages === false) continue;
       if (!['user', 'assistant'].includes(role) && !generated) continue;
       // Hidden tool records can repeat visible image outputs. Filter them before
@@ -273,30 +390,55 @@
       if (typeof message.id !== 'string' || !message.id || seen.has(message.id)) fallback('Message identifiers in the response are ambiguous.');
       seen.add(message.id);
       const assets = [];
-      const value = messageContent(contentMessage, options, assets);
-      if (!value.trim()) continue;
+      let value = '', pageMessage = null, rendered = null;
+      try {
+        value = messageContent(contentMessage, contentOptions, assets, referenceWarnings);
+        if (rich && value.trim()) {
+          if (!window.ChatArchiveMarkdown) throw new Error('The HTML renderer is unavailable. Reload the conversation tab.');
+          rendered = window.ChatArchiveMarkdown.render(value, { assets, includeLinks: options.includeLinks !== false,
+            includeImages: !jsonExport && (role === 'user' ? options.includeUserImages : options.includeAssistantImages) !== false,
+            allowComponents: role === 'assistant', references: meta.content_references || [] });
+        }
+      }
+      catch (error) {
+        if (rich && !jsonExport && role === 'assistant' && (error.componentUnsupported || error instanceof PageFallback && error.renderedLayout) && renderedMessage) {
+          pageMessage = renderedMessage(message.id);
+        }
+        if (!pageMessage?.html?.trim()) {
+          if (error.componentUnsupported) fallback(error.message, null, true);
+          throw error;
+        }
+      }
+      if (!pageMessage && !value.trim()) continue;
       const item = { id: message.id, role: generated ? 'assistant' : role };
-      if (rich) {
-        if (!window.ChatArchiveMarkdown) throw new Error('The HTML renderer is unavailable. Reload the conversation tab.');
-        const rendered = window.ChatArchiveMarkdown.render(value, { assets, includeLinks: options.includeLinks !== false,
-          includeImages: (role === 'user' ? options.includeUserImages : options.includeAssistantImages) !== false });
+      if (pageMessage) item.html = pageMessage.html;
+      else if (rich) {
         item.html = rendered.html;
+        if (rendered.componentCount) componentMessages++;
+        unavailableCitations += rendered.unavailableCitations || 0;
         if (rendered.images.length) item.media = rendered.images;
         if (role === 'assistant') {
           if (!assistantImages.has(turn)) assistantImages.set(turn, new Set());
           for (const image of rendered.images) if (image.source.pointer) assistantImages.get(turn).add(image.source.pointer);
         }
       } else item[options.outputFormat === 'md' ? 'markdown' : 'text'] = value;
-      size += (item.html || value).length + message.id.length;
+      if (jsonExport) { item.markdown = value; item.text = messageContent(contentMessage, { ...options, outputFormat: 'txt' }); }
+      size += (item.html || value).length + (jsonExport ? item.markdown.length + item.text.length : 0) + message.id.length;
       if (size > maxOutputCharacters) throw new Error('This export exceeds the content memory limit. No partial file was saved.');
       if (options.includeTimestamps && Number.isFinite(message.create_time) && message.create_time > 0) {
         const date = new Date(message.create_time * 1000);
         if (Number.isFinite(date.getTime())) { item.createdAt = date.toISOString(); item.messageId = message.id; }
       }
-      records.push({ item, generated, turn });
+      records.push({ item, generated, turn, pathIndex, fromPage: !!pageMessage });
+    }
+    if (records.some(record => record.fromPage) && records.some(record => record.generated)) {
+      // Tool images can repeat media inside a rendered answer. Without the
+      // page's image-to-tool mapping, a hybrid could silently duplicate them.
+      fallback('Rendered cards with generated-image messages need collection from the page.');
     }
     const generatedImages = new Map();
-    for (const { item, generated, turn } of records) {
+    const positions = new Map();
+    for (const { item, generated, turn, pathIndex } of records) {
       if (generated) {
         if (!generatedImages.has(turn)) generatedImages.set(turn, new Set());
         const kept = generatedImages.get(turn);
@@ -313,20 +455,32 @@
         });
         if (!item.media.length) continue;
       }
-      item.order = messages.length;
+      if (item.role === 'assistant' && activityByTurn.has(turn)) { item.activities = activityByTurn.get(turn).activities; activityByTurn.delete(turn); }
+      positions.set(item.id, pathIndex);
       messages.push(item);
     }
+    for (const group of activityByTurn.values()) {
+      const item = { id: group.id, role: 'assistant', activities: group.activities };
+      if (rich) item.html = ''; else item[options.outputFormat === 'md' ? 'markdown' : 'text'] = '';
+      if (jsonExport) { item.text = ''; item.markdown = ''; }
+      if (options.includeTimestamps && Number.isFinite(group.createTime) && group.createTime > 0 && Number.isFinite(new Date(group.createTime * 1000).getTime())) {
+        item.createdAt = new Date(group.createTime * 1000).toISOString(); item.messageId = group.id;
+      }
+      positions.set(item.id, group.index); messages.push(item);
+    }
+    messages.sort((a, b) => positions.get(a.id) - positions.get(b.id));
+    messages.forEach((item, order) => { item.order = order; });
     if (!messages.length) fallback('No supported messages were returned by direct export.');
     return { provider: 'ChatGPT', title: typeof raw.title === 'string' ? raw.title : 'ChatGPT conversation',
-      url, exportedAt: new Date().toISOString(), collectionMethod: 'chatgpt-api', messages };
+      url, exportedAt: new Date().toISOString(), collectionMethod: 'chatgpt-api', componentMessages,
+      unavailableCitations: unavailableCitations + referenceWarnings.unavailableCitations, messages };
   }
 
-  async function collect(options, assertCurrent, onProgress = () => {}, onPart) {
-    if (options.includeActivity) return { fallback: 'Including Working / Thinking requires collection from the page.' };
+  async function collect(options, assertCurrent, onProgress = () => {}, onPart, readRendered) {
     const url = location.href, id = conversationId(url);
     if (!id) return { fallback: 'This chat needs collection from the page.' };
     const controller = new AbortController();
-    let timedOut = false, interrupted = null, token = null, pageMessages = null;
+    let timedOut = false, interrupted = null, token = null, pageMessages = null, completedData = null;
     const check = () => {
       assertCurrent();
       if (location.href !== url) throw new Error('The conversation changed during export. No file was saved.');
@@ -351,51 +505,98 @@
       const raw = await readJson(response, maxResponseBytes, check);
       check();
       const nodes = window.ChatArchiveExtractor?.nodes() || [];
-      const visibleIds = nodes.map(node => node.getAttribute('data-chatgpt-selection-message-id') || node.getAttribute('data-message-id')).filter(Boolean);
+      const visibleIds = nodes.map(node => window.ChatArchiveExtractor?.sourceIdOf?.(node) || node.getAttribute('data-chatgpt-selection-message-id') || node.getAttribute('data-message-id')).filter(Boolean);
       let data;
       try { data = normalize(raw, url, options, visibleIds); }
       catch (error) {
         if (error.renderedLayout) {
-          // Reuse the same branch/visibility/ID validation as direct text export.
-          // Only text-bearing conversations qualify: tool images or attachments
-          // may have different DOM grouping, so counts alone cannot prove them.
+          // Plan with inert placeholders: ordinary messages still use the API,
+          // and only rich component answers need an exact matching page node.
+          // Their raw component references are not parsed as ordinary Markdown.
           try {
-            const path = activePath(raw, id);
-            const simple = path.every(({ message: m }) => !m ||
-              !(m.content?.parts || []).some(part => typeof part !== 'string') &&
-              !(m.metadata?.attachments?.length) &&
-              !(m.metadata?.content_references || []).some(ref => ['image', 'images', 'image_v2'].includes(ref.type)));
-            if (simple) pageMessages = normalize(raw, url, { ...options, outputFormat: 'md' }, visibleIds)
-              .messages.map(({ id, role }) => ({ id, role }));
-          } catch (_) { /* No proof: keep the ordinary page-collection checks. */ }
+            const needed = [];
+            const plan = normalize(raw, url, options, visibleIds, messageId => {
+              needed.push(messageId); return { html: '<span></span>' };
+            });
+            pageMessages = plan.messages.map(({ id, role }) => ({ id, role }));
+            if (readRendered) {
+              clearTimeout(timeout); // Page media loading has its own deadline.
+              let matchFailure = null;
+              const rendered = await readRendered(pageMessages, needed, diagnostic => { matchFailure = diagnostic; });
+              check();
+              if (rendered) {
+                data = normalize(raw, url, options, visibleIds, messageId => rendered.get(messageId));
+                data.collectionMethod = 'chatgpt-api-rendered';
+                data.renderedMessages = needed.length;
+              } else {
+                const diagnostic = matchFailure || { version: 1, reason: 'rendered-message-match-failed', code: 'RENDERED_MATCH_UNAVAILABLE',
+                  expectedMessages: pageMessages.length, requiredRenderedMessages: needed.length };
+                error.sourceDiagnostic = error.sourceDiagnostic ? { ...error.sourceDiagnostic, renderedMatch: diagnostic } : diagnostic;
+                const explanations = {
+                  RENDERED_MESSAGE_NOT_LOADED: 'A required card or diagram is not loaded on the page. Open that answer in the chat, then retry.',
+                  RENDERED_ID_AMBIGUOUS: 'A loaded answer has conflicting message identifiers. Its card or diagram could not be safely matched.',
+                  RENDERED_BRANCH_MISMATCH: 'The loaded answers changed during export. Retry after the chat finishes loading.',
+                  RENDERED_ORDER_MISMATCH: 'Loaded answers are duplicated or out of order. Reload the chat, then retry.',
+                  RENDERED_ROLE_MISMATCH: 'A loaded answer could not be matched to its author. Reload the chat, then retry.',
+                  RENDERED_CONTENT_MISMATCH: 'A required card or diagram disappeared or contained no exportable content. Open that answer, then retry.'
+                };
+                error.message = explanations[diagnostic.code] || 'A card image or layout could not be reconstructed from saved data and could not be matched to loaded page content.';
+              }
+            }
+          } catch (reason) {
+            if (!(reason instanceof PageFallback)) throw reason;
+            pageMessages = null;
+          }
         }
-        throw error;
+        if (!data) throw error;
       }
       if (['html', 'pdf'].includes(options.outputFormat)) {
         clearTimeout(timeout); // Media has its own bounded per-image deadline.
         const resolvePointer = async (pointer, messageId) => {
           const match = pointer.match(/^(file-service|sediment):\/\/([\w-]+)$/);
           const sandbox = pointer.match(/^sandbox:(\/mnt\/data\/[^\r\n]+)$/);
-          if (!match && !sandbox) throw new Error('Unsupported image pointer.');
+          if (!match && !sandbox) { const error = new Error('Unsupported image pointer.'); error.imageDiagnostic = { code: 'IMAGE_REFERENCE_UNSUPPORTED' }; throw error; }
           const path = sandbox
             ? `/backend-api/conversation/${id}/interpreter/download?${new URLSearchParams({ message_id: messageId, sandbox_path: sandbox[1], download_intent: 'true' })}`
             : match[1] === 'sediment' ? `/backend-api/conversation/${id}/attachment/${match[2]}/download` : `/backend-api/files/${match[2]}/download`;
-          const deadline = setTimeout(() => controller.abort(), 60000);
+          const referenceController = new AbortController();
+          const abortReference = () => referenceController.abort();
+          controller.signal.addEventListener('abort', abortReference, { once: true });
+          if (controller.signal.aborted) abortReference();
+          let referenceTimedOut = false, requestStage = 'request';
+          const deadline = setTimeout(() => { referenceTimedOut = true; referenceController.abort(); }, 60000);
           try {
-            const response = await request(path, token ? { authorization: `Bearer ${token}` } : {});
-            if (!response.ok) { await response.body?.cancel(); throw new Error('Image download reference unavailable.'); }
+            check();
+            const response = await fetch(new URL(path, url).href, { method: 'GET', credentials: 'include', cache: 'no-store', redirect: 'error',
+              signal: referenceController.signal, headers: { accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) } });
+            requestStage = 'headers';
+            if (!response.ok) { await response.body?.cancel(); const error = new Error('Image download reference unavailable.'); error.imageDiagnostic = { code: 'IMAGE_REFERENCE_UNAVAILABLE', httpStatus: response.status }; throw error; }
+            requestStage = 'metadata';
             const metadata = await readJson(response, 1024 * 1024, check);
             if (typeof metadata.download_url !== 'string') throw new Error('Image download reference missing.');
             return metadata.download_url;
-          } finally { clearTimeout(deadline); }
+          } catch (error) {
+            check();
+            const failure = new Error('Image download reference unavailable.');
+            failure.imageDiagnostic = error.imageDiagnostic || { code: controller.signal.aborted ? 'IMAGE_ABORTED' : referenceTimedOut ? 'IMAGE_TIMEOUT' : requestStage === 'request' ? 'IMAGE_NETWORK_ERROR' : 'IMAGE_REFERENCE_UNAVAILABLE' };
+            failure.imageDiagnostic.requestStage = requestStage;
+            throw failure;
+          } finally { clearTimeout(deadline); controller.signal.removeEventListener('abort', abortReference); referenceController.abort(); }
         };
         await window.ChatArchiveApiMedia.embed(data, { resolvePointer, signal: controller.signal, token, check, onProgress, onPart });
       }
+      completedData = data;
       check();
       onProgress(96, 'Conversation loaded directly', data.multipart?.messages || data.messages.length);
       return { data };
     } catch (error) {
-      check();
+      try { check(); }
+      catch (current) {
+        if (current.exportStopped && error.partialRecoveryFailed) throw error;
+        if (current.exportStopped && error.exportStopped) throw error;
+        if (current.exportStopped && completedData) current.partialData = completedData;
+        throw current;
+      }
       if (interrupted) throw interrupted;
       if (timedOut) return { fallback: 'Direct export timed out.' };
       if (error instanceof PageFallback) return { fallback: error.message, sourceDiagnostic: error.sourceDiagnostic || null, pageMessages };

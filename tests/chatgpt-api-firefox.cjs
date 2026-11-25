@@ -64,8 +64,8 @@ else (async () => {
   const origin = `http://127.0.0.1:${server.address().port}`;
   fs.writeFileSync(path.join(extension, 'manifest.json'), JSON.stringify({ manifest_version: 3, name: 'Local API fixture', version: '1.0',
     browser_specific_settings: { gecko: { id: 'local-api-fixture@example.test' } },
-    host_permissions: ['http://127.0.0.1/*'], content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['parser.js', 'markdown.js', 'media.js', 'renderers.js', 'reader.js', 'runner.js'] }] }));
-  for (const [source, name] of [['shared/vendor/markdown-it.js', 'parser.js'], ['content/markdown.js', 'markdown.js'], ['content/api-media.js', 'media.js'], ['shared/renderers.js', 'renderers.js']]) fs.writeFileSync(path.join(extension, name), read(source));
+    host_permissions: ['http://127.0.0.1/*'], content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['parser.js', 'components.js', 'markdown.js', 'media.js', 'renderers.js', 'reader.js', 'runner.js'] }] }));
+  for (const [source, name] of [['shared/vendor/markdown-it.js', 'parser.js'], ['content/components.js', 'components.js'], ['content/markdown.js', 'markdown.js'], ['content/api-media.js', 'media.js'], ['shared/renderers.js', 'renderers.js']]) fs.writeFileSync(path.join(extension, name), read(source));
   // Only the origin restriction is redirected to the local fixture. Fetch,
   // credentials, streaming response reader and parser are production code.
   fs.writeFileSync(path.join(extension, 'reader.js'), read('content/chatgpt-api.js').replaceAll('https://chatgpt.com', origin));

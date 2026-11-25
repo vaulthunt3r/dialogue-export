@@ -83,6 +83,14 @@ footer span:first-child::after { content:'LOCAL EXPORT'; font-size:9px; }
 .activity[data-state="error"] .activity-track::before { content:'[!]'; }
 .activity-track span { display:none; }
 body[data-panel="true"] #activity { display:none; }
+body[data-panel="true"] #activity[data-state="error"] { display:block; }
+body[data-panel="true"] #activity[data-state="decision"] { display:block; }
+.activity[data-state="decision"] { max-height:200px; }
+.activity[data-state="decision"] .activity-track { display:none; }
+#stopChoices { margin-top:7px; }
+.export-diagnostic { flex-shrink:0; margin-bottom:8px; font-size:10px; }
+.export-diagnostic pre { max-height:140px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
+.export-diagnostic button { margin-top:5px; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .archive-format { border:0; padding:3px 4px; font:inherit; text-align:center; }
 #siteAccess { flex-shrink:0; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed var(--border); font-size:10px; }

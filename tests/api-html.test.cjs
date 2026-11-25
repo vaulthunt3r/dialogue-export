@@ -28,7 +28,7 @@ function fixture() {
   w.TextDecoder = TextDecoder; w.TextEncoder = TextEncoder;
   w.URL.createObjectURL = () => 'blob:synthetic'; w.URL.revokeObjectURL = () => {};
   w.Image = class { async decode() {} }; // Decode is verified with real images in isolated Firefox.
-  for (const file of ['shared/vendor/markdown-it.js', 'content/markdown.js', 'content/api-media.js', 'content/chatgpt-api.js', 'shared/renderers.js']) w.eval(read(file));
+  for (const file of ['shared/vendor/markdown-it.js', 'content/components.js', 'content/markdown.js', 'content/api-media.js', 'content/chatgpt-api.js', 'shared/renderers.js']) w.eval(read(file));
   return { w, close: () => w.close() };
 }
 function options(format = 'html') { return { outputFormat: format, includeLinks: true }; }
@@ -87,17 +87,39 @@ test('conversation HTML cannot execute scripts, inject styles, events or javascr
   } finally { f.close(); }
 });
 
-test('ChatGPT visual components request page collection instead of leaking their source into HTML/PDF', () => {
+test('unresolved card images are rejected instead of leaking their source into HTML/PDF', () => {
   const f = fixture();
   try {
     const source = '## Browsers\n\n<box gap={3}>\n<row align="start" gap={3}>\n<AsyncImage query="browser screenshot" aspectRatio="4:3" maxWidth="136px"/>\n<box flex="1" gap={1}>\n**<Entity category="software" value="Example browser"/>**\n\n    <badge color="success">First choice</badge>\n\n    A description.\n</box>\n</row>\n</box>';
     for (const format of ['html', 'pdf']) {
-      assert.throws(() => f.w.ChatArchiveApi.normalize(raw([source]), URL, options(format)), /rich content needs collection from the page/);
+      assert.throws(() => f.w.ChatArchiveApi.normalize(raw([source]), URL, options(format)), /unsupported layout, expression or reference/);
       // Literal component examples remain code. They must not force a page scan.
       for (const literal of ['```jsx\n' + source + '\n```', '~~~jsx\n' + source + '\n~~~', '`<AsyncImage query="example"/>`', '    <AsyncImage query="example"/>']) {
         const result = f.w.ChatArchiveApi.normalize(raw([literal]), URL, options(format));
         assert.ok(result.messages[0].html.includes('&lt;AsyncImage'));
       }
+    }
+  } finally { f.close(); }
+});
+
+test('cards, bare layout components, reordered attributes and Cite render directly in HTML/PDF', () => {
+  const f = fixture();
+  try {
+    const sources = ['<card gap={3}>**Plans** {#each [{gb:10},{gb:100}] as t}<row><text>{t.gb} GB</text><spacer/></row>{/each}</card>',
+      '<box height={12} radius="sm" background="#16a34a" width="30%"/>',
+      '<row>Plan and price</row>', '<text weight="medium">Value</text>', '<divider/>',
+      '<Cite refs={["turn1view0","turn1view1"]}/>'];
+    for (const outputFormat of ['html', 'pdf']) for (const source of sources) {
+      assert.doesNotMatch(f.w.ChatArchiveApi.normalize(raw([source]), URL, options(outputFormat)).messages[0].html, /&lt;(?:card|box|row|text|divider|Cite)/);
+      for (const literal of ['```jsx\n' + source + '\n```', '~~~jsx\n' + source + '\n~~~', '    ' + source]) {
+        const result = f.w.ChatArchiveApi.normalize(raw([literal]), URL, options(outputFormat));
+        assert.ok(result.messages[0].html.includes('&lt;'));
+      }
+    }
+    const plain = '<cite>Ordinary citation</cite> and `<card gap={3}>` and <cardigan>word</cardigan>';
+    assert.doesNotThrow(() => f.w.ChatArchiveApi.normalize(raw([plain]), URL, options()));
+    for (const outputFormat of ['txt', 'md']) {
+      assert.doesNotThrow(() => f.w.ChatArchiveApi.normalize(raw([sources[0]]), URL, options(outputFormat)));
     }
   } finally { f.close(); }
 });
@@ -150,6 +172,82 @@ test('HTML collection embeds bytes, deduplicates downloads and never sends the t
     const doc = new JSDOM(f.w.ChatArchiveRenderers.html(result.data, { includeTitle: true })).window.document;
     assert.equal(doc.images.length, 3);
     for (const img of doc.images) assert.deepEqual(Buffer.from(img.src.split(',')[1], 'base64'), png);
+  } finally { f.close(); }
+});
+
+test('image_group unwraps six saved results in order beside an entity and embeds every image in HTML/PDF', async () => {
+  for (const format of ['html', 'pdf']) {
+    const f = fixture();
+    try {
+      const marker = '\uE200image_group\uE202{"query":["PRIVATE_QUERY"]}\uE201';
+      const entity = '\uE200entity\uE202PRIVATE_ENTITY_ID\uE201';
+      const r = raw([`Before ${entity}\n\n${marker}\n\nAfter`]);
+      r.mapping.answer.message.metadata = { content_references: [
+        { type: 'image_group', matched_text: marker, safe_urls: ['https://private.invalid/DO_NOT_FETCH'], alt: 'Gallery',
+          images: Array.from({ length: 6 }, (_, i) => ({ image_search_query: 'PRIVATE_QUERY', image_result: {
+            content_url: `https://images.example.com/image-${i}.png`, thumbnail_url: `https://images.example.com/thumb-${i}.png`,
+            url: `https://source.example.com/article-${i}`, title: `Image ${i}` } })) },
+        { type: 'entity', matched_text: entity, safe_urls: [], name: 'Example', alt: 'Example', entity_data: { name: 'Example' } }
+      ] };
+      const calls = [];
+      f.w.fetch = async (url, init) => {
+        calls.push({ url, init });
+        if (url.endsWith('/session')) return json({ accessToken: 'PRIVATE_TOKEN' });
+        if (url.endsWith(`/conversation/${ID}`)) return json(r);
+        return new Response(png, { headers: { 'content-type': 'image/png' } });
+      };
+      const { data, fallback } = await f.w.ChatArchiveApi.collect({ ...options(format), includeActivity: true }, () => {});
+      assert.ok(data, fallback); assert.equal(data.embeddedImages, 6);
+      const html = data.messages[0].html, doc = new JSDOM(html).window.document;
+      assert.equal(doc.images.length, 6); assert.match(doc.body.textContent, /Before Example[\s\S]*After/);
+      assert.deepEqual(Array.from(doc.images, img => img.alt), Array.from({ length: 6 }, (_, i) => `Image ${i}`));
+      for (const img of doc.images) assert.deepEqual(Buffer.from(img.src.split(',')[1], 'base64'), png);
+      assert.deepEqual(calls.slice(2).map(call => call.url), Array.from({ length: 6 }, (_, i) => `https://images.example.com/image-${i}.png`));
+      for (const call of calls.slice(2)) { assert.equal(call.init.credentials, 'omit'); assert.equal(call.init.headers.authorization, undefined); }
+      assert.doesNotMatch(JSON.stringify(data), /PRIVATE|image_group|image_result|source.example.com|images.example.com/);
+    } finally { f.close(); }
+  }
+});
+
+test('image_group respects image switches and text-only formats without fetching or requiring image data', async () => {
+  for (const format of ['txt', 'md', 'json', 'html', 'pdf']) for (const role of ['user', 'assistant']) {
+    const f = fixture();
+    try {
+      const marker = '\uE200image_group\uE202PRIVATE_QUERY\uE201', r = raw([`Before\n\n${marker}\n\nAfter`]);
+      r.mapping.answer.message.author.role = role;
+      r.mapping.answer.message.metadata = { content_references: [{ type: 'image_group', matched_text: marker, images: [null], safe_urls: ['PRIVATE_URL'] }] };
+      let calls = 0;
+      f.w.fetch = async url => { calls++; return url.endsWith('/session') ? json({ accessToken: 'PRIVATE_TOKEN' }) : json(r); };
+      const selected = role === 'user' ? { includeUserImages: false } : { includeAssistantImages: false };
+      const { data, fallback } = await f.w.ChatArchiveApi.collect({ ...options(format), ...selected }, () => {});
+      assert.ok(data, fallback); assert.equal(calls, 2); assert.equal(data.embeddedImages, undefined);
+      assert.match(JSON.stringify(data.messages), /Before[\s\S]*After/);
+      assert.doesNotMatch(JSON.stringify(data), /PRIVATE|image_group/);
+      if (['txt', 'md', 'json'].includes(format)) assert.match(JSON.stringify(data), /image data is not included/);
+      else assert.doesNotMatch(data.messages[0].html, /<img|Image gallery/);
+    } finally { f.close(); }
+  }
+});
+
+test('image_group uses explicit image fields and rejects missing results instead of using query or source-page URLs', () => {
+  const f = fixture();
+  try {
+    const marker = '\uE200image_group\uE202PRIVATE_QUERY\uE201', r = raw([marker]);
+    const ref = { type: 'image_group', matched_text: marker, images: [], safe_urls: ['https://source.example.com/page'] };
+    r.mapping.answer.message.metadata = { content_references: [ref] };
+    for (const bad of [null, 'https://source.example.com/page', { image_search_query: 'PRIVATE_QUERY' }, { image_result: { url: 'https://source.example.com/page', title: 'PRIVATE_TITLE' } }]) {
+      ref.images = [bad];
+      assert.throws(() => f.w.ChatArchiveApi.normalize(r, URL, options()), error => {
+        assert.match(error.message, /downloadable reference/);
+        assert.equal(error.sourceDiagnostic.references[0].images, 1);
+        assert.doesNotMatch(JSON.stringify(error.sourceDiagnostic), /PRIVATE|https:|source.example/);
+        return true;
+      });
+    }
+    ref.images = [{ image_result: { thumbnail_url: 'https://images.example.com/thumb.png', title: 'Preview' } }];
+    assert.equal(f.w.ChatArchiveApi.normalize(r, URL, options()).messages[0].media[0].source.url, 'https://images.example.com/thumb.png');
+    ref.images = [{ content_url: 'https://images.example.com/flat.png', title: 'Flat result' }];
+    assert.equal(f.w.ChatArchiveApi.normalize(r, URL, options()).messages[0].media[0].source.url, 'https://images.example.com/flat.png');
   } finally { f.close(); }
 });
 
@@ -324,6 +422,54 @@ test('generated-image fallback reports only bounded structural data from the act
   } finally { f.close(); }
 });
 
+test('rich-reference failures report bounded types and field presence without marker payloads or metadata values', async () => {
+  const f = fixture();
+  try {
+    const token = '\uE200cite\uE202PRIVATE_REFERENCE_ID\uE201';
+    const r = raw([`PRIVATE_TEXT ${token}`]);
+    const refs = Array.from({ length: 20 }, () => ({ type: 'PRIVATE_TYPE', matched_text: '\uE200PRIVATE_MARKER\uE202PRIVATE_PAYLOAD\uE201',
+      PRIVATE_KEY: 'PRIVATE_VALUE', title: 'PRIVATE_TITLE', url: 'https://private.invalid/PRIVATE_URL' }));
+    refs.push({ type: 'image_v2', matched_text: token, images: [], items: [{ content_url: 'https://private.invalid/image', title: 'PRIVATE_IMAGE' }] });
+    r.mapping.answer.message.metadata = { content_references: refs };
+    f.w.fetch = async url => url.endsWith('/session') ? json({ accessToken: 'PRIVATE_TOKEN' }) : json(r);
+    let result = await f.w.ChatArchiveApi.collect(options(), () => {});
+    assert.match(result.fallback, /image gallery/);
+    let report = result.sourceDiagnostic;
+    assert.equal(report.marker, 'cite'); assert.equal(report.context, 'assistant');
+    assert.equal(report.referenceCount, 21); assert.equal(report.matchingReferenceCount, 1);
+    assert.equal(report.references[0].type, 'image_v2'); assert.equal(report.references[0].matches, true);
+    assert.ok(report.references[0].firstItemFields.includes('content_url'));
+    assert.ok(report.references.length <= 8); assert.equal(report.referencesTruncated, true);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE|private\.invalid|https:/);
+
+    r.mapping.answer.message.metadata.content_references = [{ type: 'PRIVATE_TYPE', matched_text: token }];
+    result = await f.w.ChatArchiveApi.collect(options(), () => {});
+    assert.equal(result.sourceDiagnostic.matchingReferenceCount, 1);
+    assert.equal(result.sourceDiagnostic.references[0].type, 'other');
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE/);
+
+    r.mapping.answer.message.content.parts = ['PRIVATE_TEXT \uE200PRIVATE_KIND\uE202PRIVATE_PAYLOAD\uE201'];
+    result = await f.w.ChatArchiveApi.collect(options(), () => {});
+    assert.equal(result.sourceDiagnostic.marker, 'other'); assert.equal(result.sourceDiagnostic.matchingReferenceCount, 0);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE/);
+  } finally { f.close(); }
+});
+
+test('missing saved-activity references are identified separately from response and image failures', async () => {
+  const f = fixture();
+  try {
+    const r = raw(['PRIVATE_ACTIVITY \uE200entity\uE202PRIVATE_REFERENCE\uE201']);
+    r.mapping.answer.message.channel = 'commentary';
+    r.mapping.answer.message.content.content_type = 'text';
+    f.w.fetch = async url => url.endsWith('/session') ? json({ accessToken: 'PRIVATE_TOKEN' }) : json(r);
+    const result = await f.w.ChatArchiveApi.collect({ ...options(), includeActivity: true }, () => {});
+    assert.match(result.fallback, /rich content/); assert.equal(result.sourceDiagnostic.context, 'activity');
+    assert.equal(result.sourceDiagnostic.marker, 'entity'); assert.equal(result.sourceDiagnostic.referenceCount, 0);
+    assert.equal(result.sourceDiagnostic.matchingReferenceCount, 0);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE/);
+  } finally { f.close(); }
+});
+
 test('Stop aborts a pending image download instead of falling back or returning partial HTML', { timeout: 2000 }, async () => {
   const f = fixture();
   try {
@@ -400,6 +546,87 @@ test('staging failure stops without preparing subsequent messages or returning a
     await assert.rejects(f.w.ChatArchiveApi.collect(options(), () => {}, () => {}, async () => { throw Error('Disk quota fixture'); }), /Disk quota fixture/);
     assert.equal(images, 2);
   } finally { f.close(); }
+});
+
+test('Stop and image errors retain only complete messages, never a partially embedded answer', async () => {
+  for (const reason of ['stop', 'http', 'reference']) {
+    const f = fixture();
+    try {
+      const first = imageMessage('first', 'user', 'sediment://first');
+      const second = imageMessage('second', 'assistant', 'sediment://second-a');
+      second.content.parts.push({ content_type: 'image_asset_pointer', asset_pointer: 'sediment://second-b' });
+      const r = chain([first, second, imageMessage('later', 'user', 'sediment://later')]);
+      let stopped = false, fetchedImages = 0;
+      const check = () => { if (stopped) { const error = Error('Stopped'); error.exportStopped = true; throw error; } };
+      f.w.fetch = async url => {
+        if (url.endsWith('/session')) return json({ accessToken: 'PRIVATE_TOKEN' });
+        if (url.endsWith(`/conversation/${ID}`)) return json(r);
+        if (url.includes('/second-b/download') && reason === 'reference') return json({}, 403);
+        if (url.endsWith('/download')) return json({ download_url: url.replace('/download', '/image') });
+        fetchedImages++;
+        if (url.endsWith('/second-b/image')) {
+          if (reason === 'stop') { stopped = true; throw Error('PRIVATE_ERROR'); }
+          return new Response('PRIVATE_RESPONSE', { status: 503 });
+        }
+        return new Response(png);
+      };
+      await assert.rejects(f.w.ChatArchiveApi.collect(options(), check), error => {
+        assert.equal(reason === 'stop' ? error.exportStopped : error.imageEmbedFailed, true);
+        const partial = error.partialData;
+        assert.deepEqual(Array.from(partial.messages, message => message.id), ['first']);
+        assert.equal(partial.embeddedImages, 1);
+        assert.deepEqual(JSON.parse(JSON.stringify(partial.partialExport)), { reason: reason === 'stop' ? 'stopped' : 'image-error', messages: 1, totalMessages: 3 });
+        assert.doesNotMatch(JSON.stringify(partial), /second|later|PRIVATE|sediment:|export-image-placeholder/);
+        const output = f.w.ChatArchiveRenderers.html(partial, { includeTitle: false });
+        assert.match(output, /Partial export/); assert.match(output, /1 of 3 complete messages/);
+        if (reason !== 'stop') {
+          assert.equal(error.mediaDiagnostic.image, 3); assert.equal(error.mediaDiagnostic.total, 4);
+          assert.equal(error.mediaDiagnostic.phase, reason === 'reference' ? 'reference' : 'download');
+          assert.equal(error.mediaDiagnostic.download.httpStatus, reason === 'reference' ? 403 : 503);
+          assert.doesNotMatch(JSON.stringify(error.mediaDiagnostic), /PRIVATE|https:|sediment:/);
+        }
+        return true;
+      });
+      assert.equal(fetchedImages, reason === 'reference' ? 2 : reason === 'http' ? 5 : 3);
+    } finally { f.close(); }
+  }
+});
+
+test('stopped multipart preparation keeps acknowledged parts once and flushes the completed tail', async () => {
+  for (const point of ['during-stage', 'next-image', 'image-error', 'disk-error']) {
+    const f = fixture();
+    try {
+      const big = Buffer.from(png); big.writeUInt32BE(4000, 16); big.writeUInt32BE(4000, 20);
+      const r = chain(['first', 'second', 'third'].map(id => imageMessage(id, 'user', `sediment://${id}`)));
+      let stopped = false, images = 0; const parts = [], flags = [];
+      f.w.fetch = async url => {
+        if (url.endsWith('/session')) return json({});
+        if (url.endsWith(`/conversation/${ID}`)) return json(r);
+        if (url.endsWith('/download')) return json({ download_url: url.replace('/download', '/image') });
+        images++;
+        if (url.endsWith('/third/image') && point !== 'during-stage') {
+          if (point !== 'image-error') stopped = true;
+          return new Response('Unavailable', { status: 403 });
+        }
+        return new Response(big);
+      };
+      const check = () => { if (stopped) { const error = Error('Stopped'); error.exportStopped = true; throw error; } };
+      const onPart = async (data, options) => {
+        if (options.stopped && point === 'disk-error') throw Error('Disk write failed');
+        parts.push(Array.from(data.messages, message => message.id)); flags.push(options.stopped);
+        if (point === 'during-stage') stopped = true;
+      };
+      await assert.rejects(f.w.ChatArchiveApi.collect(options(), check, () => {}, onPart), error => {
+        if (point === 'disk-error') { assert.match(error.message, /Disk write failed/); assert.equal(error.partialData, undefined); return true; }
+        const expected = 2;
+        assert.equal(error.partialData.multipart.parts, expected); assert.equal(error.partialData.multipart.messages, expected);
+        assert.equal(error.partialData.messages.length, 0); assert.equal(error.partialData.partialExport.totalMessages, 3);
+        assert.deepEqual(parts, [['first'], ['second']]);
+        assert.deepEqual(flags, [false, true]);
+        return true;
+      });
+    } finally { f.close(); }
+  }
 });
 
 test('image source switches prevent excluded downloads and stale details settings add no captions', async () => {

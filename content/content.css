@@ -62,6 +62,11 @@
 .chat-archive-progress-more>summary::marker { content:''; }
 .chat-archive-ascii { margin:4px 0 !important; font:11px/1.4 ui-monospace,Consolas,monospace !important; }
 .chat-archive-progress pre { margin:5px 0 !important; }
+.chat-archive-stop-choice { display:flex !important; flex-wrap:wrap !important; gap:8px !important; margin-top:8px !important; }
+.chat-archive-stop-choice button { all:initial; font:inherit !important; color:var(--archive-text) !important; background:var(--archive-bg) !important; cursor:pointer !important; }
+.chat-archive-stop-choice button:disabled { opacity:.5 !important; cursor:default !important; }
+.chat-archive-stop-choice button:focus-visible { outline:2px solid var(--archive-text) !important; outline-offset:2px !important; }
+.chat-archive-progress[data-state="decision"] .chat-archive-timeline,.chat-archive-progress[data-state="decision"] .chat-archive-ascii { display:none !important; }
 .chat-archive-selection-bar { display:flex !important; gap:8px !important; align-items:center !important; flex-wrap:wrap !important; }
 .chat-archive-selection-bar button::before { content:'['; }
 .chat-archive-selection-bar button::after { content:']'; }

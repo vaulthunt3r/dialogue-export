@@ -1,0 +1,12 @@
+/* Minimal source-page styling for the supplied rendered card markup. */
+:root { --spacing: .25rem; --color-surface-elevated: #fff; --color-surface-tertiary: #ededed; --color-border: #ddd; --dil-radius-xl: 16px; --dil-radius-sm: 4px; }
+[data-d-component="box"], [data-d-component="card"], [data-d-component="row"] { display: flex; min-width: 0; }
+[data-d-direction="col"] { flex-direction: column; }
+[data-d-direction="row"] { flex-direction: row; }
+[data-d-align="center"] { align-items: center; }
+[data-d-auto-spacing] { gap: 8px; }
+[data-d-component="spacer"] { flex: 1 1 0%; }
+[data-d-text-flow] { margin: 0; }
+[data-d-weight="medium"] { font-weight: 500; }
+[data-d-text-align="end"] { text-align: end; }
+[data-d-component="caption"] { font-size: 14px; color: #666; }

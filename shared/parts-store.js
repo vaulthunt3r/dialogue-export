@@ -61,8 +61,12 @@
     const stem = dot < 0 ? value : value.slice(0, dot), ext = dot < 0 ? '' : value.slice(dot);
     return `${stem}-part-${String(index).padStart(3, '0')}-of-${String(total).padStart(3, '0')}${ext}`;
   }
+  function partialFilename(value) {
+    const dot = value.lastIndexOf('.');
+    return dot < 0 ? `${value}-partial` : `${value.slice(0, dot)}-partial${value.slice(dot)}`;
+  }
   root.ChatArchiveParts = {
-    filename, job, remove, cleanup, allJobs,
+    filename, partialFilename, job, remove, cleanup, allJobs,
     async start(exportJob, owner) {
       await cleanup();
       if (!['html', 'pdf'].includes(exportJob.format)) throw new Error('Multipart export supports HTML and PDF.');
@@ -89,9 +93,13 @@
     seal(id, owner, summary) {
       return locked(id, async () => {
         const entry = await job(id, owner);
-        if (entry.state !== 'preparing' || entry.count !== summary.parts || entry.messages !== summary.messages || entry.count < 2) {
+        const partial = summary.partialExport;
+        if (partial && (!['stopped', 'image-error'].includes(partial.reason) || partial.messages !== entry.messages ||
+            !Number.isSafeInteger(partial.totalMessages) || partial.totalMessages <= entry.messages)) throw new Error('Invalid partial export summary.');
+        if (entry.state !== 'preparing' || entry.count !== summary.parts || entry.messages !== summary.messages || entry.count < (partial ? 1 : 2)) {
           throw new Error('The multipart export is incomplete. No files were saved.');
         }
+        if (partial) entry.partialExport = { reason: partial.reason, messages: entry.messages, totalMessages: partial.totalMessages };
         entry.state = 'ready'; entry.updatedAt = Date.now();
         await transaction(['jobs'], 'readwrite', tx => tx.objectStore('jobs').put(entry));
         return entry.count;
@@ -103,7 +111,9 @@
       const part = await read('parts', [id, index]);
       if (!part) throw new Error('This export part is no longer available.');
       part.data.exportPart = { index, total: entry.count, first: part.first, last: part.last, messages: entry.messages };
-      return { ...part, job: { ...entry.job, filename: filename(entry.job.filename, index, entry.count) } };
+      if (entry.partialExport) part.data.partialExport = entry.partialExport;
+      const name = entry.partialExport ? partialFilename(entry.job.filename) : entry.job.filename;
+      return { ...part, job: { ...entry.job, filename: filename(name, index, entry.count) } };
     },
     saved(id, owner, index) {
       return locked(id, async () => {

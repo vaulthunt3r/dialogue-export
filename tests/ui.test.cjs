@@ -19,17 +19,17 @@ function environment(html, url='https://chatgpt.com/c/test') {
 async function popup(config={}) {
   const env = environment(read('popup/popup.html'), 'https://fixture.invalid/popup.html'+(config.panel?'?panel=1':''));
   const {w,clock} = env;
-  const model = { info:{ ok:true,title:'Weekend ideas',provider:'ChatGPT',count:8,selected:0,picking:false,theme:'light',activeExport:false,exportStatus:null,...config.info },saved:config.saved||{},calls:[],closed:false,queries:0,contexts:0 };
+  const model = { info:{ ok:true,title:'Weekend ideas',provider:'ChatGPT',count:8,selected:0,picking:false,theme:'light',activeExport:false,exportStatus:null,...config.info },saved:config.saved||{},calls:[],opened:[],closed:false,queries:0,contexts:0 };
   w.close = () => { model.closed=true; };
   w.browser = {
-    runtime:{getManifest:()=>({version:'0.5.1'}),sendMessage:async req=>{
+    runtime:{getURL:file=>`moz-extension://fixture/${file}`,getManifest:()=>({version:'0.5.1'}),sendMessage:async req=>{
       if(req.type==='PANEL_CONTEXT'){model.contexts++;return {ok:true,tabId:42,notifications:true};}
       if(req.type==='PANEL_SEND')return w.browser.tabs.sendMessage(42,req.message);
       return {ok:true};
     }},
     permissions:config.permissions || {contains:async()=>false,request:async()=>false},
     storage:{local:{get:async()=>copy(model.saved),set:async p=>{model.saved={...model.saved,...p};}}},
-    tabs:{query:async()=>{model.queries++;return [{id:1,url:config.url||'https://chatgpt.com/c/test'}];},sendMessage:async(_,req)=>{
+    tabs:{create:async args=>{model.opened.push(copy(args));return{id:2};},query:async()=>{model.queries++;return [{id:1,url:config.url||'https://chatgpt.com/c/test'}];},sendMessage:async(_,req)=>{
       model.calls.push(req);
       if(model.fail) throw Error('Receiving end does not exist');
       if(config.handle) { const result=await config.handle(req,model); if(result!==undefined) return result; }
@@ -64,6 +64,21 @@ test('image access page requests only its declared origin on click and does not 
   }
 });
 
+test('reopened toolbar and in-page menus keep image permission repair accessible without restarting export', async () => {
+  for (const panel of [false, true]) {
+    const p = await popup({ panel, info: { exportStatus: { state: 'error', label: 'Image access is required.', startedAt: -12000, finishedAt: -10000,
+      mediaDiagnostic: { phase: 'permission', download: { code: 'IMAGE_PERMISSION_REQUIRED' } } } } });
+    try {
+      await p.clock.tickAsync(6100); assert.equal(p.$('allowImageAccess').hidden, false);
+      p.$('allowImageAccess').click(); await p.clock.tickAsync(0);
+      assert.deepEqual(p.model.opened, [{ url: 'moz-extension://fixture/popup/image-access.html' }]);
+      assert.equal(p.model.calls.some(r => r.type === 'BEGIN_EXPORT'), false);
+      p.model.info.exportStatus = { state: 'error', mediaDiagnostic: { download: { code: 'IMAGE_NETWORK_ERROR' } } };
+      await p.clock.tickAsync(1100); assert.equal(p.$('allowImageAccess').hidden, true);
+    } finally { p.close(); }
+  }
+});
+
 test('popup keeps export disabled until the first connection completes',async()=>{
   let resolvePing;
   const p=await popup({handle:req=>req.type==='PING'?new Promise(resolve=>{resolvePing=resolve;}):undefined});
@@ -82,11 +97,48 @@ test('a never-resolving connection has a bounded timeout',async()=>{
   const p=await popup({handle:()=>new Promise(()=>{})});await p.clock.tickAsync(6400);
   assert.equal(p.$('retry').hidden,false);assert.match(p.$('error').textContent,/did not respond/);p.close();
 });
-test('unsupported pages and empty conversations explain the next action',async()=>{
-  for(const config of [{url:'https://example.com/'},{info:{count:0}}]){
+test('unsupported pages explain the next action',async()=>{
+  for(const config of [{url:'https://example.com/'}]){
     const p=await popup(config);await p.clock.tickAsync(10);
     assert.equal(p.$('exportButton').disabled,true);assert.equal(p.$('errorBox').hidden,false);assert.match(p.$('error').textContent,/Open a conversation/);p.close();
   }
+});
+
+test('empty/loading conversations become ready automatically without another click',async()=>{
+  const p=await popup({info:{count:0}});
+  try {
+    await p.clock.tickAsync(10);
+    assert.equal(p.$('exportButton').disabled,true);
+    assert.equal(p.$('errorBox').hidden,true);
+    assert.match(p.$('status').textContent,/Waiting for conversation/);
+    p.model.info.count=4;
+    await p.clock.tickAsync(1100);
+    assert.equal(p.$('exportButton').disabled,false);
+    assert.match(p.$('status').textContent,/ready/);
+    assert.equal(p.model.calls.some(r=>r.type==='BEGIN_EXPORT'),false);
+  }finally{p.close();}
+});
+
+test('a temporary disconnect recovers automatically and never starts an export',async()=>{
+  const p=await popup();
+  try {
+    await p.clock.tickAsync(10);p.model.fail=true;await p.clock.tickAsync(1100);
+    assert.equal(p.$('exportButton').disabled,true);
+    p.model.fail=false;await p.clock.tickAsync(2100);
+    assert.equal(p.$('errorBox').hidden,true);assert.equal(p.$('exportButton').disabled,false);
+    assert.equal(p.model.calls.some(r=>r.type==='BEGIN_EXPORT'),false);
+  }finally{p.close();}
+});
+
+test('a missing receiver is restored once through the background before reconnecting',async()=>{
+  const p=await popup({fail:true});
+  try {
+    let restores=0;
+    p.w.browser.runtime.sendMessage=async req=>{if(req.type==='ENSURE_CONTENT'){restores++;p.model.fail=false;}return {ok:true};};
+    await p.clock.tickAsync(10);
+    assert.equal(restores,1);assert.equal(p.$('exportButton').disabled,false);
+    await p.clock.tickAsync(2100);assert.equal(restores,1);
+  }finally{p.close();}
 });
 test('Selected enables only with messages; All ends picking and hides selection tools',async()=>{
   const p=await popup();await p.clock.tickAsync(10);p.radio('scope','selected');await p.clock.tickAsync(10);
@@ -119,6 +171,23 @@ test('reopened popup restores live progress, elapsed time and finished state',as
 test('connection loss disables further exports until reconnect',async()=>{
   const p=await popup();await p.clock.tickAsync(10);p.model.fail=true;await p.clock.tickAsync(1050);
   assert.equal(p.$('retry').hidden,false);assert.equal(p.$('exportButton').disabled,true);p.close();
+});
+
+test('reopened popup and page menu retain error diagnostics after the transient notice expires',async()=>{
+  for(const panel of [true,false]) {
+    const diagnostic={version:2,reason:'unsupported-rich-reference',context:'activity',marker:'entity',referenceCount:0};
+    const p=await popup({panel,info:{exportStatus:{state:'error',label:'Unsupported reference',startedAt:-12000,finishedAt:-10000,format:'html',sourceDiagnostic:diagnostic}}});
+    try {
+      let copied;Object.defineProperty(p.w.navigator,'clipboard',{value:{writeText:async value=>{copied=value;}}});
+      await p.clock.tickAsync(10);
+      assert.equal(p.$('exportDiagnostic').hidden,false);assert.equal(p.$('exportDiagnostic').open,false);
+      p.$('exportDiagnostic').open=true;p.$('copyDiagnostic').click();await p.clock.tickAsync(0);
+      assert.deepEqual(JSON.parse(copied),diagnostic);assert.match(p.$('copyDiagnostic').textContent,/Copied/);
+      await p.clock.tickAsync(1050);assert.equal(p.$('exportDiagnostic').open,true);assert.match(p.$('copyDiagnostic').textContent,/Copied/);
+      p.model.info.exportStatus={state:'running',startedAt:0,format:'html'};p.model.info.activeExport=true;
+      await p.clock.tickAsync(1050);assert.equal(p.$('exportDiagnostic').hidden,true);assert.equal(p.$('diagnosticText').textContent,'');
+    } finally {p.close();}
+  }
 });
 
 test('embedded menu binds to its owner, keeps settings and collapses only after accepted export',async()=>{
@@ -155,8 +224,8 @@ test('ZIP sits with formats, opens the archive, and does not change the single-c
 
 test('missing persistent site access offers opt-in for only the current supported site',async()=>{
   for(const hostname of ['chatgpt.com','gemini.google.com']) {
-    const requests=[];
-    const p=await popup({url:`https://${hostname}/c/test`,permissions:{contains:async()=>false,request:async r=>{requests.push(JSON.parse(JSON.stringify(r)));return true;}}});try {
+    const requests=[];let granted=false;
+    const p=await popup({url:`https://${hostname}/c/test`,permissions:{contains:async r=>r.origins?granted:false,request:async r=>{requests.push(JSON.parse(JSON.stringify(r)));granted=true;return true;}}});try {
       await p.clock.tickAsync(10);assert.equal(p.$('siteAccess').hidden,false);assert.equal(requests.length,0);
       p.$('enableSiteAccess').click();await p.clock.tickAsync(10);
       assert.deepEqual(requests,[{origins:[`https://${hostname}/*`]}]);
@@ -180,6 +249,19 @@ test('toolbar Stop remains available when in-page status is collapsed on a narro
   const p=await popup({info:{activeExport:true,exportStatus:{state:'running',startedAt:0,format:'html',cancellable:true}}});
   try {await p.clock.tickAsync(10);assert.equal(p.$('stopExport').hidden,false);p.$('stopExport').click();await p.clock.tickAsync(10);assert.ok(p.model.calls.some(r=>r.type==='STOP_EXPORT'));}
   finally {p.close();}
+});
+
+test('toolbar and embedded menu restore pending Save/Discard choices and do not decide automatically',async()=>{
+  for(const panel of [true,false])for(const canSaveCollected of [true,false]){
+    const p=await popup({panel,info:{activeExport:true,exportStatus:{state:'decision',label:'Export stopped',stopDetail:'2 complete messages ready.',canSaveCollected,phase:'collecting',startedAt:-10000,finishedAt:0}}});
+    try{
+      await p.clock.tickAsync(6000);assert.equal(p.$('stopChoices').hidden,false);assert.equal(p.$('stopExport').hidden,true);
+      assert.equal(p.$('saveCollected').disabled,!canSaveCollected);assert.equal(p.$('exportButton').disabled,true);
+      assert.equal(p.model.calls.some(request=>request.type==='RESOLVE_STOP'),false);
+      p.$(canSaveCollected?'saveCollected':'discardCollected').click();await p.clock.tickAsync(10);
+      assert.deepEqual(copy(p.model.calls.filter(request=>request.type==='RESOLVE_STOP')),[{type:'RESOLVE_STOP',action:canSaveCollected?'save':'discard'}]);
+    }finally{p.close();}
+  }
 });
 
 test('dedicated notification settings request permission only on click and persist success',async()=>{
@@ -213,7 +295,7 @@ test('notification permission denial or failure leaves export available and noti
     try {
       await p.clock.tickAsync(10);p.$('notifyOnCompletion').click();await p.clock.tickAsync(10);
       assert.equal(p.model.saved.notifyOnCompletion,false);assert.equal(p.$('notifyOnCompletion').checked,false);
-      assert.equal(p.$('exportButton').disabled,false);assert.match(p.$('error').textContent,/results will still stay visible/);
+      assert.equal(p.$('exportButton').disabled,false);assert.match(p.$('error').textContent,/status is still shown/);
     } finally {p.close();}
   }
 });
@@ -237,6 +319,116 @@ function content() {
   return {...env,sent,send:req=>listener(req),result:value=>{readyResult=value;},nodes:()=>w.document.querySelectorAll('[data-message-author-role]')};
 }
 const job={format:'md',filename:'example.md',options:{selectedOnly:true,includeTitle:true,includeLinks:true}};
+
+test('Stop and image failure offer a persistent explicit choice before a partial single-file handoff',async()=>{
+  for(const reason of ['stopped','image-error'])for(const action of ['save','discard']){
+    const c=content();
+    try{
+      c.w.ChatArchiveApi={eligible:()=>true,collect:async()=>{
+        await new Promise(resolve=>c.w.setTimeout(resolve,20));
+        const error=Error('Image 3 unavailable');error[reason==='stopped'?'exportStopped':'imageEmbedFailed']=true;
+        if(reason==='image-error')error.mediaDiagnostic={version:3,phase:'download',image:3,total:8,download:{code:'IMAGE_HTTP_ERROR',httpStatus:403}};
+        error.partialData={provider:'ChatGPT',url:c.w.location.href,messages:[{order:0,role:'user',html:'<p>Complete</p>'}],partialExport:{reason,messages:1,totalMessages:5}};
+        throw error;
+      }};
+      await c.send({type:'BEGIN_EXPORT',job:{format:'html',filename:'partial.html',options:{}}});
+      if(reason==='stopped')await c.send({type:'STOP_EXPORT'});
+      await c.clock.tickAsync(50);
+      assert.equal((await c.send({type:'PING'})).exportStatus.state,'decision');
+      assert.ok(c.w.document.querySelector('.chat-archive-stop-choice'));
+      assert.equal((await c.send({type:'BEGIN_EXPORT',job})).ok,false);
+      assert.equal((await c.send({type:'RESOLVE_STOP',action:'unknown'})).ok,false);
+      await c.clock.tickAsync(6000);assert.ok(c.w.document.querySelector('.chat-archive-stop-choice'));
+      assert.equal(c.sent.some(request=>request.type==='EXPORT_READY'),false);
+      if(reason==='image-error')assert.match(c.w.document.querySelector('.chat-archive-image-diagnostic pre').textContent,/403/);
+      c.w.document.querySelector(`.chat-archive-stop-choice [data-action="${action}"]`).click();await c.clock.tickAsync(10);
+      const ready=c.sent.filter(request=>request.type==='EXPORT_READY');assert.equal(ready.length,action==='save'?1:0);
+      const status=(await c.send({type:'PING'})).exportStatus;
+      assert.equal(status.state,action==='save'?'done':'error');
+      assert.match(status.label,action==='save'?/Partial export/:/discarded/);
+      if(action==='save'){assert.equal(ready[0].data.messages.length,1);assert.equal(ready[0].data.partialExport.reason,reason);}
+      await c.clock.tickAsync(5000);assert.equal(c.w.document.querySelector('.chat-archive-progress'),null);
+    }finally{c.close();}
+  }
+});
+
+test('staged partial parts survive the choice, save in order for HTML/PDF, and discard cleans them',async()=>{
+  for(const format of ['html','pdf'])for(const action of ['save','discard','navigate']){
+    const c=content();
+    try{
+      c.result(request=>request.type==='EXPORT_PARTS_START'?{ok:true,id:'staged'}:{ok:true});
+      c.w.ChatArchiveApi={eligible:()=>true,collect:async(options,check,progress,onPart)=>{
+        for(let order=0;order<2;order++)await onPart({url:c.w.location.href,messages:[{order,html:'<p>Complete</p>'}]});
+        const error=Error('Stopped');error.exportStopped=true;
+        error.partialData={url:c.w.location.href,messages:[],multipart:{parts:2,messages:2},partialExport:{reason:'stopped',messages:2,totalMessages:9}};throw error;
+      }};
+      await c.send({type:'BEGIN_EXPORT',job:{format,filename:`partial.${format}`,options:{}}});await c.clock.tickAsync(10);
+      assert.equal(c.sent.filter(request=>request.type==='EXPORT_PARTS_ABORT').length,0);
+      assert.equal((await c.send({type:'PING'})).exportStatus.state,'decision');
+      if(action==='navigate')c.w.history.pushState({},'','/c/different');
+      else await c.send({type:'RESOLVE_STOP',action});
+      await c.clock.tickAsync(200);
+      const sealed=c.sent.filter(request=>request.type==='EXPORT_PARTS_SEAL');
+      if(action==='save'){
+        assert.equal(sealed.length,1);assert.equal(sealed[0].summary.partialExport.messages,2);
+        assert.deepEqual(c.sent.filter(request=>request.type==='EXPORT_PARTS_SAVE').map(request=>request.index),format==='html'?[1,2]:[]);
+        assert.equal(c.sent.filter(request=>request.type==='EXPORT_PARTS_PRINT').length,format==='pdf'?1:0);
+        assert.equal(c.sent.filter(request=>request.type==='EXPORT_PARTS_ABORT').length,0);
+        assert.match((await c.send({type:'PING'})).exportStatus.label,/Partial export/);
+      }else{
+        assert.equal(sealed.length,0);assert.ok(c.sent.some(request=>request.type==='EXPORT_PARTS_ABORT'));
+        assert.equal(c.sent.some(request=>['EXPORT_READY','EXPORT_PARTS_SAVE','EXPORT_PARTS_PRINT'].includes(request.type)),false);
+      }
+      assert.equal((await c.send({type:'PING'})).activeExport,false);
+    }finally{c.close();}
+  }
+});
+
+test('early Stop disables saving when no complete message is available',async()=>{
+  const c=content();try{
+    c.w.ChatArchiveApi={eligible:()=>true,collect:async()=>{const error=Error('Stopped');error.exportStopped=true;throw error;}};
+    await c.send({type:'BEGIN_EXPORT',job:{...job,format:'html'}});await c.clock.tickAsync(10);
+    assert.equal(c.w.document.querySelector('.chat-archive-stop-choice [data-action="save"]').disabled,true);
+    assert.equal((await c.send({type:'RESOLVE_STOP',action:'save'})).ok,false);
+    assert.equal((await c.send({type:'RESOLVE_STOP',action:'discard'})).ok,true);await c.clock.tickAsync(10);
+    assert.equal((await c.send({type:'PING'})).activeExport,false);assert.equal(c.sent.some(request=>request.type==='EXPORT_READY'),false);
+  }finally{c.close();}
+});
+
+test('closing a source page with a pending stop choice releases the job without recreating the status',async()=>{
+  const c=content();try{
+    c.w.ChatArchiveApi={eligible:()=>true,collect:async()=>{const error=Error('Stopped');error.exportStopped=true;throw error;}};
+    await c.send({type:'BEGIN_EXPORT',job:{...job,format:'html'}});await c.clock.tickAsync(10);
+    assert.equal((await c.send({type:'PING'})).exportStatus.state,'decision');
+    c.w.dispatchEvent(new c.w.Event('pagehide'));await c.clock.tickAsync(10);
+    assert.equal((await c.send({type:'PING'})).activeExport,false);
+    assert.equal(c.w.document.querySelector('.chat-archive-progress'),null);
+    assert.equal(c.sent.some(request=>request.type==='EXPORT_READY'),false);
+  }finally{c.close();}
+});
+
+test('Stop during HTML saving finishes the current file then offers saving or discarding the remainder',async()=>{
+  for(const action of ['save','discard']){
+    const c=content();try{
+      let finishFirst;
+      c.result(request=>request.type==='EXPORT_PARTS_START'?{ok:true,id:'staged'}:request.type==='EXPORT_PARTS_SAVE'&&request.index===1?new Promise(resolve=>{finishFirst=resolve;}):{ok:true});
+      c.w.ChatArchiveApi={eligible:()=>true,collect:async(options,check,progress,onPart)=>{
+        for(let order=0;order<2;order++)await onPart({url:c.w.location.href,messages:[{order,html:'<p>Complete</p>'}]});
+        return {data:{url:c.w.location.href,messages:[],multipart:{parts:2,messages:2}}};
+      }};
+      await c.send({type:'BEGIN_EXPORT',job:{format:'html',filename:'full.html',options:{}}});await c.clock.tickAsync(10);
+      await c.send({type:'STOP_EXPORT'});await c.clock.tickAsync(200);
+      assert.deepEqual(c.sent.filter(request=>request.type==='EXPORT_PARTS_SAVE').map(request=>request.index),[1]);
+      assert.equal(c.sent.some(request=>request.type==='EXPORT_PARTS_ABORT'),false);
+      finishFirst({ok:true});await c.clock.tickAsync(10);
+      assert.equal((await c.send({type:'PING'})).exportStatus.state,'decision');
+      assert.match((await c.send({type:'PING'})).exportStatus.stopDetail,/1 file\(s\) already saved/);
+      await c.send({type:'RESOLVE_STOP',action});await c.clock.tickAsync(10);
+      assert.deepEqual(c.sent.filter(request=>request.type==='EXPORT_PARTS_SAVE').map(request=>request.index),action==='save'?[1,2]:[1]);
+      assert.equal((await c.send({type:'PING'})).activeExport,false);
+    }finally{c.close();}
+  }
+});
 test('image permission failure offers a repair button; other download failures do not', async () => {
   for (const code of ['IMAGE_PERMISSION_REQUIRED', 'IMAGE_NETWORK_ERROR']) {
     const c = content();
@@ -275,6 +467,8 @@ test('content locks duplicate exports and selection changes, then reports succes
   const c=content();c.nodes()[1].dataset.chatArchiveSelected='true';let finish;
   c.result(req=>req.type==='EXPORT_READY'?new Promise(resolve=>{finish=resolve;}):{ok:true});
   const first=await c.send({type:'BEGIN_EXPORT',job});assert.equal(first.ok,true);
+  let listeners=0;c.w.browser.runtime.onMessage.addListener=()=>listeners++;
+  c.w.eval(read('content/content.js'));assert.equal(listeners,0,'restoring scripts cannot replace the active export listener');
   const second=await c.send({type:'BEGIN_EXPORT',job});assert.equal(second.ok,false);
   assert.equal((await c.send({type:'CLEAR_SELECTION'})).ok,false);await c.clock.tickAsync(10);
   const ping=await c.send({type:'PING'});assert.equal(ping.activeExport,true);assert.equal(ping.exportStatus.processed,1);
@@ -290,19 +484,62 @@ test('failed file handoff leaves a readable error that can be dismissed',async()
   c.w.document.querySelector('.chat-archive-dismiss').click();assert.equal(c.w.document.querySelector('.chat-archive-progress'),null);c.close();
 });
 
-test('finished export stays visible beyond fifteen seconds and notifies once until dismissed',async()=>{
+test('successful export disappears after five seconds and notifies only once',async()=>{
   const c=content();
   try {
     c.nodes()[0].dataset.chatArchiveSelected='true';
     await c.send({type:'BEGIN_EXPORT',job:{...job,options:{...job.options,notifyOnCompletion:true}}});
-    await c.clock.tickAsync(60000);
+    await c.clock.tickAsync(10);
+    const status = (await c.send({type:'PING'})).exportStatus;
+    await c.clock.tickAsync(status.finishedAt + 4999 - c.w.Date.now());
     assert.equal((await c.send({type:'PING'})).exportStatus.state,'done');
     assert.match(c.w.document.querySelector('.chat-archive-progress').textContent,/File sent to Firefox/);
     assert.deepEqual(copy(c.sent.filter(r=>r.type==='EXPORT_COMPLETE')),[{type:'EXPORT_COMPLETE',format:'md',parts:1,notify:true}]);
-    c.w.document.querySelector('.chat-archive-dismiss').click();await c.clock.tickAsync(1);
+    await c.clock.tickAsync(1);
+    assert.equal(c.w.document.querySelector('.chat-archive-progress'),null);
+    assert.equal(c.sent.filter(r=>r.type==='EXPORT_DISMISSED').length,1);
+    await c.clock.tickAsync(60000);
+    assert.equal(c.sent.filter(r=>r.type==='EXPORT_DISMISSED').length,1);
+  } finally {c.close();}
+});
+
+test('an old dismissal timer cannot remove a later running export; errors get their own five seconds',async()=>{
+  const c=content();
+  try {
+    c.nodes()[0].dataset.chatArchiveSelected='true';
+    await c.send({type:'BEGIN_EXPORT',job}); await c.clock.tickAsync(1000);
+    let finish;
+    c.result(req=>req.type==='EXPORT_READY'?new Promise(resolve=>{finish=resolve;}):{ok:true});
+    await c.send({type:'BEGIN_EXPORT',job}); await c.clock.tickAsync(6000);
+    assert.equal(c.w.document.querySelector('.chat-archive-progress').dataset.state,'running');
+    finish({ok:false,error:'Download unavailable'}); await c.clock.tickAsync(10);
+    const status=(await c.send({type:'PING'})).exportStatus;
+    await c.clock.tickAsync(status.finishedAt+4999-c.w.Date.now());
+    assert.equal(c.w.document.querySelector('.chat-archive-progress').dataset.state,'error');
+    assert.match(c.w.document.querySelector('.chat-archive-progress').textContent,/Download unavailable/);
+    assert.equal(c.sent.filter(r=>r.type==='EXPORT_DISMISSED').length,0);
+    await c.clock.tickAsync(1);
     assert.equal(c.w.document.querySelector('.chat-archive-progress'),null);
     assert.equal(c.sent.filter(r=>r.type==='EXPORT_DISMISSED').length,1);
   } finally {c.close();}
+});
+
+test('manual dismissal clears completion timers; restored pages honor the original five-second deadline for success and error',async()=>{
+  for (const manual of [true,false]) for (const failed of [true,false]) {
+    const c=content();
+    try {
+      c.nodes()[0].dataset.chatArchiveSelected='true';
+      if(failed)c.result({ok:false,error:'Download unavailable'});
+      await c.send({type:'BEGIN_EXPORT',job}); await c.clock.tickAsync(1000);
+      if (manual) c.w.document.querySelector('.chat-archive-dismiss').click();
+      else c.w.dispatchEvent(new c.w.Event('pagehide'));
+      await c.clock.tickAsync(10000);
+      c.w.dispatchEvent(new c.w.PageTransitionEvent('pageshow',{persisted:true}));
+      await c.clock.tickAsync(1);
+      assert.equal(c.w.document.querySelector('.chat-archive-progress'),null);
+      assert.equal(c.sent.filter(r=>r.type==='EXPORT_DISMISSED').length,1);
+    } finally {c.close();}
+  }
 });
 
 test('multipart completion sends one final notification only after every HTML part or PDF handoff',async()=>{
@@ -325,24 +562,30 @@ test('multipart completion sends one final notification only after every HTML pa
   }
 });
 
-test('a page image failure retains the direct-reader fallback reason and both diagnostics',async()=>{
+test('an unsupported saved-chat export retains its diagnostic without starting page image collection',async()=>{
   const c=content();
   try {
     const sourceDiagnostic={version:1,reason:'unmapped-tool-images',imageParts:3,images:[]};
-    c.w.ChatArchiveApi={eligible:()=>true,collect:async()=>({fallback:'This generated-image response needs collection from the page.',sourceDiagnostic})};
+    c.w.ChatArchiveApi={eligible:()=>true,conversationId:()=> 'saved-chat',collect:async()=>({fallback:'This generated-image response needs collection from the page.',sourceDiagnostic})};
+    let imageChecks=0;
     c.w.ChatArchiveMedia={beginExport(){},endExport(){},async waitForImages(){
+      imageChecks++;
       const error=Error('This export exceeds the image memory limit.');
       error.mediaDiagnostic={version:2,phase:'budget',exceeded:'imageCharacters',attempted:{assets:3,imageCharacters:17000000}};
       throw error;
     }};
     await c.send({type:'BEGIN_EXPORT',job:{format:'html',filename:'images.html',options:{selectedOnly:false}}});
-    await c.clock.tickAsync(30000);
+    await c.clock.tickAsync(10);
     const status=(await c.send({type:'PING'})).exportStatus;
     assert.equal(status.state,'error');
     assert.match(c.w.document.querySelector('.chat-archive-progress-detail').textContent,/generated-image response/);
     assert.equal(JSON.parse(c.w.document.querySelector('.chat-archive-source-diagnostic pre').textContent).imageParts,3);
-    assert.equal(JSON.parse(c.w.document.querySelector('.chat-archive-image-diagnostic pre').textContent).exceeded,'imageCharacters');
+    assert.equal(imageChecks,0);
+    assert.equal(c.w.document.querySelector('.chat-archive-image-diagnostic pre'),null);
     assert.equal(c.sent.some(request=>request.type==='EXPORT_READY'),false);
+    await c.clock.tickAsync(30000);
+    assert.equal(c.w.document.querySelector('.chat-archive-progress'),null);
+    assert.equal((await c.send({type:'PING'})).exportStatus.sourceDiagnostic.imageParts,3);
   } finally {c.close();}
 });
 test('All still collects the entire already-loaded fixture through the unchanged scan',async()=>{
@@ -474,6 +717,19 @@ test('PDF waits for image decoding before enabling print and reports failed imag
     assert.equal(e.w.document.querySelector('#error').textContent.includes('could not be loaded'),fails);
     e.close();
   }
+});
+
+test('PDF preview retains the partial-export warning even when document title is disabled',async()=>{
+  const e=environment(read('print/print.html'),'https://fixture.invalid/print.html?id=partial');
+  try{
+    e.w.eval(read('shared/renderers.js'));
+    const content=e.w.ChatArchiveRenderers.html({title:'Example',messages:[{role:'user',html:'<p>Complete</p>'}],partialExport:{reason:'image-error',messages:1,totalMessages:9}},{includeTitle:false});
+    e.w.browser={runtime:{sendMessage:async()=>({ok:true,content,filename:'example-partial.pdf'})}};
+    e.w.eval(read('print/print.js'));await e.clock.tickAsync(10);
+    assert.match(e.w.document.querySelector('#document .export-partial-note').textContent,/1 of 9/);
+    assert.match(e.w.document.querySelector('#printStatus').textContent,/partial PDF/);
+    assert.equal(e.w.document.querySelector('#printButton').disabled,false);
+  }finally{e.close();}
 });
 
 test('activity option defaults off, persists, and is disabled for Gemini',async()=>{

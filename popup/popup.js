@@ -33,8 +33,9 @@ $('enableSiteAccess').addEventListener('click', async () => {
   try {
     // Call directly from the click: Firefox requires an explicit user gesture.
     const granted = await browser.permissions.request({ origins: [origin] });
-    text('siteAccessStatus', granted ? 'Automatic site access enabled. Reload this chat to check the icon.' : 'Automatic access was not enabled. You can still start from the toolbar.');
+    text('siteAccessStatus', granted ? 'Automatic site access enabled.' : 'Automatic access was not enabled. You can still start from the toolbar.');
     $('enableSiteAccess').hidden = granted;
+    if (granted) await connect();
   } catch (_) {
     text('siteAccessStatus', 'Could not enable access. Right-click the Firefox toolbar icon to manage site permissions.');
   } finally { siteAccessBusy = false; $('enableSiteAccess').disabled = false; }
@@ -46,7 +47,16 @@ function withTimeout(promise, ms, message) {
 }
 function send(message) {
   if (tabId == null) return Promise.reject(new Error('No active tab was found.'));
-  return withTimeout(inPanel ? browser.runtime.sendMessage({ type: 'PANEL_SEND', message }) : browser.tabs.sendMessage(tabId, message), 3000, 'The conversation did not respond. Refresh the page, then try again.');
+  return withTimeout(inPanel ? browser.runtime.sendMessage({ type: 'PANEL_SEND', message }) : browser.tabs.sendMessage(tabId, message, { frameId: 0 }), 3000, 'The conversation did not respond. Retrying automatically.');
+}
+async function ping() {
+  try { return await send({ type: 'PING' }); }
+  catch (error) {
+    if (!/receiving end|establish connection/i.test(error.message || '')) throw error;
+    const restored = await withTimeout(browser.runtime.sendMessage({ type: 'ENSURE_CONTENT', tabId }), 8000, 'The page is still loading. Retrying automatically.');
+    if (restored?.code === 'SITE_ACCESS_REQUIRED') throw Error('Allow access to this site from the Firefox extension menu, then retry.');
+    return send({ type: 'PING' });
+  }
 }
 function text(id, value) { if ($(id).textContent !== value) $(id).textContent = value; }
 function error(message = '', retry = false) {
@@ -92,15 +102,19 @@ function render() {
   $('archiveChats').hidden = info?.provider !== 'ChatGPT';
   $('archiveChats').disabled = state === 'connecting' || busy || info?.activeExport;
   const running = info?.activeExport === true;
-  $('stopExport').hidden = !running;
+  const deciding = info?.exportStatus?.state === 'decision';
+  $('stopExport').hidden = !running || deciding;
   $('stopExport').disabled = info?.exportStatus?.cancellable === false;
+  $('stopChoices').hidden = !deciding;
+  $('saveCollected').disabled = !info?.exportStatus?.canSaveCollected;
+  text('saveCollected', info?.exportStatus?.phase === 'saving' ? '[ Save remaining ]' : '[ Save collected ]');
   const ready = state === 'ready';
   const selected = scope === 'selected';
   $('compactPaginationOption').hidden = !['html', 'pdf'].includes(format);
   $('imageOptions').hidden = !['html', 'pdf'].includes(format);
   document.body.dataset.state = ready && !running ? 'ready' : state;
   // The ZIP chooser remains available on an empty ChatGPT chat too.
-  const emptyChat = state === 'disconnected' && info?.provider === 'ChatGPT' && info.count === 0;
+  const emptyChat = ['waiting', 'disconnected'].includes(state) && info?.provider === 'ChatGPT' && info.count === 0;
   $('controls').disabled = (!ready && !emptyChat) || busy || running;
   $('includeTimestamps').disabled = info?.provider !== 'ChatGPT';
   $('includeActivity').disabled = info?.provider !== 'ChatGPT';
@@ -122,14 +136,36 @@ function render() {
   text('actionHint', running ? 'You can close this popup. Keep the conversation tab open.' : selected && !info?.selected ? 'Use “Choose messages” to select messages on the page.' : format === 'pdf' ? 'Save the PDF from Firefox’s print dialog.' : 'Firefox will ask where to save your file.');
   if (ready) text('status', `${info.provider || 'Conversation'} / ${running ? 'exporting' : 'ready'}`);
   const job = info?.exportStatus;
+  $('allowImageAccess').hidden = !(['error', 'decision'].includes(job?.state) || job?.partial) || job?.mediaDiagnostic?.download?.code !== 'IMAGE_PERMISSION_REQUIRED';
+  const diagnostic = ['error', 'decision'].includes(job?.state) || job?.partial ? job.sourceDiagnostic || job.mediaDiagnostic : null;
+  const diagnosticText = diagnostic ? JSON.stringify(diagnostic, null, 2) : '';
+  $('exportDiagnostic').hidden = !diagnostic;
+  if ($('diagnosticText').textContent !== diagnosticText) {
+    text('diagnosticText', diagnosticText); text('copyDiagnostic', '[ Copy diagnostic ]');
+    $('exportDiagnostic').open = false;
+  }
   $('activity').hidden = !job;
   if (job) {
     $('activity').dataset.state = job.state;
     text('activityTitle', job.state === 'error' ? 'Export stopped' : job.label);
     text('elapsed', elapsed(job));
-    text('activityDetail', job.state === 'error' ? job.label : `${job.processed || 0} messages collected${job.state === 'running' ? ' · working in the conversation tab' : job.format === 'pdf' ? ' · save from the print page' : ' · check Firefox’s save dialog or Downloads'}${job.state === 'done' && job.timestampNotice ? ` · ${job.timestampNotice}` : ''}`);
+    text('activityDetail', job.state === 'decision' ? job.stopDetail : job.state === 'error' ? job.label : `${job.processed || 0} messages collected${job.state === 'running' ? ' · working in the conversation tab' : job.format === 'pdf' ? ' · save from the print page' : ' · check Firefox’s save dialog or Downloads'}${job.state === 'done' && job.timestampNotice ? ` · ${job.timestampNotice}` : ''}`);
   }
 }
+$('allowImageAccess').addEventListener('click', async () => {
+  $('allowImageAccess').disabled = true;
+  try { await browser.tabs.create({ url: browser.runtime.getURL('popup/image-access.html') }); }
+  catch (_) { error('Could not open image settings. Check Dialogue Export permissions in Firefox.'); }
+  finally { $('allowImageAccess').disabled = false; }
+});
+$('copyDiagnostic').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('diagnosticText').textContent); text('copyDiagnostic', '[ Copied ]'); }
+  catch (_) {
+    const range = document.createRange(); range.selectNodeContents($('diagnosticText'));
+    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    text('copyDiagnostic', '[ Selected — press Ctrl+C ]');
+  }
+});
 function acceptInfo(next) {
   info = next;
   if (next.theme === 'light' || next.theme === 'dark') document.body.dataset.theme = next.theme;
@@ -141,6 +177,7 @@ async function connect() {
   state = 'connecting'; busy = false; info = null;
   siteOrigin = null; $('siteAccess').hidden = true;
   error(); text('status', 'Connecting to your conversation…'); render();
+  let supported = false;
   try {
     const [tabs, saved] = await Promise.all([
       withTimeout(inPanel ? browser.runtime.sendMessage({ type: 'PANEL_CONTEXT' }).then(result => {
@@ -171,6 +208,7 @@ async function connect() {
     if (tab?.url && !/^https:\/\/(chatgpt\.com|gemini\.google\.com)(\/|$)/i.test(tab.url)) {
       throw new Error('Open a conversation on ChatGPT or Gemini, then open Dialogue Export.');
     }
+    supported = Number.isInteger(tabId);
     if (!inPanel && tab?.url && browser.permissions?.contains) {
       const origin = new URL(tab.url).origin + '/*';
       const granted = await withTimeout(browser.permissions.contains({ origins: [origin] }), 2000, 'Site access unavailable').catch(() => null);
@@ -183,41 +221,46 @@ async function connect() {
     }
     let next;
     for (let retry = 0; retry < 2; retry++) {
-      try { next = await send({ type: 'PING' }); if (!next?.ok) throw new Error('No response'); break; }
+      try { next = await ping(); if (!next?.ok) throw new Error('No response'); break; }
       catch (e) { if (retry === 1) throw e; await new Promise(resolve => setTimeout(resolve, 350)); }
     }
     if (attempt !== sequence) return;
     acceptInfo(next);
-    if (!next.count && !next.activeExport) throw new Error('No messages found yet. Open a conversation, wait for its messages to appear, then try again.');
     if (!$('filename').value) $('filename').value = safeName(next.title);
-    state = 'ready'; render(); schedulePoll();
+    state = next.count || next.activeExport ? 'ready' : 'waiting';
+    if (state === 'waiting') text('status', 'Waiting for conversation messages…');
+    render(); schedulePoll();
   } catch (e) {
     if (attempt !== sequence) return;
     state = 'disconnected';
     text('status', 'Conversation unavailable');
-    const message = /receiving end|establish connection|No response/i.test(e.message) ? 'Refresh the conversation page, then try connecting again.' : e.message;
+    const message = /receiving end|establish connection|No response/i.test(e.message) ? 'Waiting for the conversation connection. Retrying automatically.' : e.message;
     error(message, true); render();
+    if (supported) schedulePoll(2000);
   }
 }
-function schedulePoll() {
+function schedulePoll(delay = 1000) {
   clearTimeout(pollTimer);
-  pollTimer = setTimeout(refresh, 1000);
+  pollTimer = setTimeout(refresh, delay);
 }
 async function refresh() {
-  if (busy || state !== 'ready') { if (state === 'ready') schedulePoll(); return; }
+  if (state === 'disconnected') { await connect(); return; }
+  if (busy || !['ready', 'waiting'].includes(state)) { if (['ready', 'waiting'].includes(state)) schedulePoll(); return; }
   const current = sequence;
   try {
-    const next = await send({ type: 'PING' });
+    const next = await ping();
     if (current !== sequence) return;
     if (busy) { schedulePoll(); return; }
     if (!next?.ok) throw new Error('Refresh the conversation page, then reconnect.');
     acceptInfo(next);
-    if (!next.count && !next.activeExport) throw new Error('This page has no messages to export. Open a conversation and reconnect.');
+    state = next.count || next.activeExport ? 'ready' : 'waiting';
+    if (state === 'waiting') text('status', 'Waiting for conversation messages…');
+    error();
     render(); schedulePoll();
   } catch (e) {
     if (current !== sequence) return;
     state = 'disconnected'; text('status', 'Connection lost');
-    error('The conversation is no longer responding. Refresh the page if needed, then reconnect.', true); render();
+    error('The conversation is temporarily unavailable. Retrying automatically.', true); render(); schedulePoll(2000);
   }
 }
 async function chooseScope(next) {
@@ -252,10 +295,10 @@ $('notifyOnCompletion').addEventListener('change', async () => {
     try {
       // Request directly in this user gesture, before awaiting any other work.
       $('notifyOnCompletion').checked = await browser.permissions.request({ permissions: ['notifications'] });
-      if (!$('notifyOnCompletion').checked) error('Notifications remain off. Export results will still stay visible in the conversation tab.');
+      if (!$('notifyOnCompletion').checked) error('Notifications remain off. Export status is still shown in the conversation tab.');
     } catch (_) {
       $('notifyOnCompletion').checked = false;
-      error('Firefox could not enable notifications. Export results will still stay visible in the conversation tab.');
+      error('Firefox could not enable notifications. Export status is still shown in the conversation tab.');
     } finally { busy = false; }
   }
   savePreferences(); render();
@@ -265,6 +308,14 @@ $('stopExport').addEventListener('click', async () => {
   $('stopExport').disabled = true;
   try { await send({ type: 'STOP_EXPORT' }); }
   catch (e) { error(e.message); }
+});
+for (const [id, action] of [['saveCollected', 'save'], ['discardCollected', 'discard']]) $(id).addEventListener('click', async () => {
+  $('saveCollected').disabled = true; $('discardCollected').disabled = true;
+  try {
+    const result = await send({ type: 'RESOLVE_STOP', action });
+    if (!result?.ok) throw Error('This stop choice is no longer available. Reopen the export menu.');
+  } catch (e) { error(e.message); }
+  finally { $('discardCollected').disabled = false; }
 });
 $('retry').addEventListener('click', connect);
 $('selectionMode').addEventListener('click', async () => {

@@ -31,6 +31,8 @@ async function loadDocument(index = 1) {
     result.content = ''; // Release the serialized copy before waiting for pixels.
     const header = parsed.querySelector('header');
     const main = parsed.querySelector('main');
+    const partialNote = parsed.querySelector('body > .export-partial-note');
+    if (partialNote) target.append(document.adoptNode(partialNote));
     if (header) target.append(document.adoptNode(header));
     if (main) target.append(document.adoptNode(main));
     if (!main) throw new Error('The conversation content could not be read.');
@@ -57,7 +59,7 @@ async function loadDocument(index = 1) {
         error.textContent = 'Some images could not be loaded for printing. Check the preview and the original conversation.';
       }
     }
-    document.querySelector('#printStatus').textContent = 'Your PDF layout is ready';
+    document.querySelector('#printStatus').textContent = partialNote ? 'Your partial PDF layout is ready' : 'Your PDF layout is ready';
     button.disabled = false;
   } catch (reason) {
     document.querySelector('#printStatus').textContent = 'Could not prepare the PDF';

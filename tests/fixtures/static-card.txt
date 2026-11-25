@@ -1,0 +1,34 @@
+<card gap={3}>
+  **Plans compared by included data**
+  {#each [{name:"Small",gb:10,price:250},{name:"Medium",gb:30,price:300},{name:"Large",gb:50,price:450},{name:"Extra",gb:100,price:900}] as t}
+    <box gap={1}>
+      <row>
+        <text weight="medium">{t.name}</text>
+        <spacer/>
+        **{t.price} credits/month**
+      </row>
+      <row align="center">
+        <box height={12} radius="sm" background="surface-tertiary" flex={1}>
+          <box height={12} radius="sm" background="#16a34a" width={`${t.gb}%`}/>
+        </box>
+        <box width="65px">
+          <text weight="medium" textAlign="end">{t.gb} GB</text>
+        </box>
+      </row>
+      <caption>{t.price/t.gb} per GB</caption>
+    </box>
+  {/each}
+</card>
+
+<card gap={2}>
+  {#each [{c:"*100#",d:"Check balance"},{c:"*200#",d:"Settings"}] as item}
+    <row align="center">
+      <box flex={1} gap={0}>
+        **{item.c}**
+        <caption>{item.d}</caption>
+      </box>
+      <button size="sm" variant="ghost" onClick={()=>GenUI.copy(item.c)}><icon name="copy"/></button>
+    </row>
+    <divider color="subtle"/>
+  {/each}
+</card>

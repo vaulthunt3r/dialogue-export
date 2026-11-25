@@ -33,12 +33,12 @@ function fixture(url = URL, runtime = false) {
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const options = { outputFormat: 'md', includeLinks: true };
 
-test('fast reader only targets saved ChatGPT TXT/MD All', () => {
+test('direct reader supports all five ChatGPT formats and excludes selected-only collection', () => {
   const f = fixture();
   try {
     assert.equal(f.api.eligible(options), true);
     for (const outputFormat of ['html', 'pdf']) assert.equal(f.api.eligible({ outputFormat }), true);
-    assert.equal(f.api.eligible({ outputFormat: 'json' }), false);
+    assert.equal(f.api.eligible({ outputFormat: 'json' }), true);
     assert.equal(f.api.eligible({ ...options, selectedOnly: true }), false);
     assert.equal(f.api.conversationId(`https://chatgpt.com/g/g-p-project/c/${ID}`), ID);
     for (const url of ['https://chatgpt.com/', 'https://chatgpt.com/?temporary-chat=true', `${URL}?temporary-chat=true`,
@@ -125,6 +125,8 @@ test('image and file placeholders are explicit, citations retain source URLs, un
     assert.match(value, /input.csv/);
     assert.doesNotMatch(value, /PRIVATE_INTERNAL_POINTER|\uE200/);
     a.metadata.content_references = [];
+    assert.match(f.api.normalize(r, URL, options).messages[1].markdown, /Source link unavailable/);
+    a.content.parts[0] = 'Result \uE200unknown\uE202private\uE201';
     assert.throws(() => f.api.normalize(r, URL, options), /rich content/);
     a.content = { content_type: 'audio', parts: [] };
     assert.throws(() => f.api.normalize(r, URL, options), /message type/);
@@ -224,24 +226,22 @@ test('1200-message runtime export bypasses missing DOM IDs, includes first/middl
   } finally { f.close(); }
 });
 
-test('network failure integrates with DOM fallback and does not save an empty API result', async () => {
+test('network failure stops saved-chat export without scrolling or saving an incomplete page', async () => {
   const f = fixture(URL, true);
   try {
     f.w.document.querySelector('main').innerHTML = '<article data-testid="conversation-turn-0" data-message-author-role="user">Page question</article>';
     f.w.fetch = async () => { throw Error('private network error'); };
     const pending = f.w.receive({ type: 'COLLECT', options });
+    const rejected = assert.rejects(pending, /Automatic page scrolling is disabled/);
     await f.clock.runAllAsync();
-    const result = await pending;
-    assert.equal(result.messages.length, 1);
-    assert.equal(result.messages[0].text, 'Page question');
-    assert.equal(result.collectionMethod, undefined);
+    await rejected;
   } finally { f.close(); }
 });
 
 test('HTML visual-component fallback collects rendered card content instead of raw API component source', async () => {
   const f = fixture(URL, true);
   try {
-    for (const file of ['shared/vendor/markdown-it.js', 'content/markdown.js']) f.w.eval(read(file));
+    for (const file of ['shared/vendor/markdown-it.js', 'content/components.js', 'content/markdown.js', 'content/api-media.js']) f.w.eval(read(file));
     const html = read('tests/fixtures/rich-cards.html');
     f.w.document.querySelector('main').outerHTML = html.slice(html.indexOf('<main>'));
     f.w.document.querySelector('main').insertAdjacentHTML('afterbegin', '<div data-message-author-role="user" data-message-id="question">Page question</div>');
@@ -250,7 +250,7 @@ test('HTML visual-component fallback collects rendered card content instead of r
     const pending = f.w.receive({ type: 'COLLECT', options: { outputFormat: 'html', includeLinks: true } });
     await f.clock.runAllAsync();
     const result = await pending;
-    assert.equal(result.collectionMethod, 'chatgpt-page-verified');
+    assert.equal(result.collectionMethod, 'chatgpt-api-rendered');
     assert.equal(result.messages.length, 2);
     assert.match(result.messages[1].html, /A description that should wrap beside the image/);
     assert.doesNotMatch(result.messages[1].html, /AsyncImage|SECRET/);
@@ -259,12 +259,12 @@ test('HTML visual-component fallback collects rendered card content instead of r
 });
 
 function eightVisualMessages(f, mutate = () => {}) {
-  for (const file of ['shared/vendor/markdown-it.js', 'content/markdown.js']) f.w.eval(read(file));
+  for (const file of ['shared/vendor/markdown-it.js', 'content/components.js', 'content/markdown.js', 'content/api-media.js']) f.w.eval(read(file));
   const raw = { conversation_id: ID, current_node: 'm7', mapping: { root: node('root', null) } };
   const dom = [];
   for (let i = 0; i < 8; i++) {
     const role = i % 2 ? 'assistant' : 'user';
-    raw.mapping[`m${i}`] = node(`m${i}`, i ? `m${i-1}` : 'root', role, i === 1 ? '<box gap={3}><Entity value="Card"/></box>' : `Message ${i}`);
+    raw.mapping[`m${i}`] = node(`m${i}`, i ? `m${i-1}` : 'root', role, i === 1 ? '<box gap={3}><AsyncImage query="Unmapped image"/><Entity value="Card"/></box>' : `Message ${i}`);
     dom.push(i % 2 ? `<div data-chatgpt-selection-message-id="m${i}"><p>Rendered message ${i}</p></div>`
       : `<div data-turn-key="turn-${i}" data-chatgpt-search-message-ids='["m${i}"]'><div data-user-message-bubble>Rendered message ${i}</div></div>`);
   }
@@ -292,8 +292,8 @@ test('all eight rendered messages verified against the API branch export without
     assert.equal(scrollWrites, 0);
     assert.equal(imageChecks, 1);
     assert.equal(result.messages.length, 8);
-    assert.equal(result.collectionMethod, 'chatgpt-page-verified');
-    assert.deepEqual(clone(result.messages.map(m => m.text)), Array.from({ length: 8 }, (_, i) => `Rendered message ${i}`));
+    assert.equal(result.collectionMethod, 'chatgpt-api-rendered');
+    assert.deepEqual(clone(result.messages.map(m => new JSDOM(m.html).window.document.body.textContent.trim())), Array.from({ length: 8 }, (_, i) => i === 1 ? 'Rendered message 1' : `Message ${i}`));
     assert.ok(result.messages.every(m => !('sourceMessageId' in m)));
     assert.equal(f.clock.countTimers(), 0);
   } finally { f.close(); }
@@ -306,7 +306,7 @@ test('rendered branch verification rejects missing, duplicated and reordered mes
       eightVisualMessages(f);
       const main = f.w.document.querySelector('main');
       const mutate = () => {
-        if (change === 'missing') main.lastElementChild.remove();
+        if (change === 'missing') main.querySelector('[data-chatgpt-selection-message-id="m1"]').remove();
         else if (change === 'duplicate') main.lastElementChild.setAttribute('data-chatgpt-selection-message-id', 'm5');
         else if (change === 'reordered') main.prepend(main.lastElementChild);
         else main.lastElementChild.setAttribute('data-chatgpt-selection-message-id', 'foreign-after-image-load');
@@ -318,8 +318,109 @@ test('rendered branch verification rejects missing, duplicated and reordered mes
       await f.clock.runAllAsync();
       const result = await settled;
       assert.ok(result.error, change + ': must not return incomplete or different rendered data');
-      assert.match(result.error.message, /matched to the complete current conversation|identifier is shared by multiple messages/, change);
+      assert.match(result.error.message, /Automatic page scrolling is disabled|identifier is shared by multiple messages/, change);
       assert.equal(f.clock.countTimers(), 0);
+    } finally { f.close(); }
+  }
+});
+
+test('a mounted rich answer uses API messages outside the viewport without scrolling', async () => {
+  const f = fixture(URL, true);
+  try {
+    const raw=eightVisualMessages(f);
+    raw.mapping.m1.message.content.parts=['<card>Chart</card>\uE200unknown-reference\uE201'];
+    raw.mapping.m1.message.metadata={content_references:[{type:'new-widget-reference',matched_text:'\uE200unknown-reference\uE201'}]};
+    const main=f.w.document.querySelector('main');
+    [...main.children].forEach((child,index)=>{if(![1,6,7].includes(index))child.remove();});
+    const rich=main.firstElementChild;
+    rich.removeAttribute('data-chatgpt-selection-message-id');rich.setAttribute('data-message-author-role','assistant');
+    rich.innerHTML='<div data-dil-source-message-id="m1"><div data-dil-message-id="m1"><p>Rendered message 1</p></div></div>';
+    let writes=0;
+    main.style.overflowY='auto';
+    Object.defineProperties(main,{clientHeight:{value:600},scrollHeight:{value:5000},scrollTop:{get:()=>4400,set:()=>writes++}});
+    const pending=f.w.receive({type:'COLLECT',options:{outputFormat:'html',includeTimestamps:true}});
+    const settled=pending.then(value=>({value}),error=>({error}));await f.clock.runAllAsync();
+    const {value:result,error}=await settled;assert.ifError(error);
+    assert.equal(writes,0);assert.equal(result.collectionMethod,'chatgpt-api-rendered');
+    assert.deepEqual(clone(result.messages.map(m=>m.id)),Array.from({length:8},(_,i)=>`m${i}`));
+    assert.match(result.messages[0].html,/Message 0/);assert.match(result.messages[1].html,/Rendered message 1/);
+    assert.match(result.messages[4].html,/Message 4/);assert.match(result.messages[7].html,/Message 7/);
+    assert.ok(result.messages[1].createdAt);assert.doesNotMatch(JSON.stringify(result),/unknown-reference|SECRET/);
+  }finally{f.close();}
+});
+
+test('a rich answer mixed with generated tool images does not guess their DOM grouping',async()=>{
+  const f=fixture(URL,true);try{
+    const raw=eightVisualMessages(f);
+    raw.mapping.generated=node('generated','m7','tool','',{
+      content:{content_type:'multimodal_text',parts:[{content_type:'image_asset_pointer',asset_pointer:'file-service://image-1'}]}
+    });raw.current_node='generated';
+    let calls=0;
+    const result=await f.api.collect({outputFormat:'html'},()=>{},()=>{},undefined,async()=>{calls++;return new Map();});
+    assert.equal(result.data,undefined);assert.equal(result.pageMessages,null);assert.equal(calls,0);
+    assert.match(result.fallback,/unsupported layout, expression or reference/);
+  }finally{f.close();}
+});
+
+test('an exactly identified rendered answer does not require page identifiers for API-only neighbours', async () => {
+  for (const outputFormat of ['html', 'pdf']) {
+    const f = fixture(URL, true);
+    try {
+      for (const file of ['shared/vendor/markdown-it.js', 'content/components.js', 'content/markdown.js', 'content/api-media.js']) f.w.eval(read(file));
+      const raw = conversation();
+      raw.mapping.answer.message.content.parts = ['<card><AsyncImage query="Unmapped image"/></card>'];
+      f.w.fetch = async url => json(url.endsWith('/session') ? {} : raw);
+      const main = f.w.document.querySelector('main');
+      // This bubble has neither an API ID nor a stable page key. It must not be
+      // snapshotted or prepared: its authoritative text is already in the API.
+      main.innerHTML = '<div data-user-message-bubble>PAGE_ONLY_NEIGHBOUR</div><div data-chatgpt-selection-message-id="answer"><section data-d-component="card"><p>Rendered card answer</p></section></div>';
+      let writes = 0, imageChecks = 0;
+      main.style.overflowY = 'auto';
+      Object.defineProperties(main, { clientHeight: { value: 600 }, scrollHeight: { value: 5000 }, scrollTop: { get: () => 4400, set: () => { writes++; } } });
+      f.w.ChatArchiveMedia = { beginExport() {}, endExport() {}, preserve() {}, waitForImages: async getRoots => {
+        const roots = getRoots(); imageChecks++;
+        assert.equal(roots.length, 1); assert.equal(roots[0].node.getAttribute('data-chatgpt-selection-message-id'), 'answer');
+      } };
+      const pending = f.w.receive({ type: 'COLLECT', options: { outputFormat, waitForImages: true } });
+      const settled = pending.then(value => ({ value }), error => ({ error }));
+      await f.clock.runAllAsync();
+      const { value, error } = await settled;
+      assert.ifError(error);
+      assert.equal(value.collectionMethod, 'chatgpt-api-rendered');
+      assert.deepEqual(clone(value.messages.map(message => message.id)), ['question', 'answer']);
+      assert.match(value.messages[0].html, /Question/);
+      assert.match(value.messages[1].html, /Rendered card answer/);
+      assert.doesNotMatch(JSON.stringify(value), /PAGE_ONLY_NEIGHBOUR|AsyncImage|Unmapped/);
+      assert.equal(imageChecks, 1); assert.equal(writes, 0);
+    } finally { f.close(); }
+  }
+});
+
+test('unmatched rendered answers report fixed reasons and counts without conversation data', async () => {
+  for (const failure of ['missing', 'ambiguous', 'role', 'changed-during-images']) {
+    const f = fixture(URL, true);
+    try {
+      eightVisualMessages(f);
+      const main = f.w.document.querySelector('main');
+      const card = main.querySelector('[data-chatgpt-selection-message-id="m1"]');
+      if (failure === 'missing') card.remove();
+      if (failure === 'ambiguous') main.firstElementChild.setAttribute('data-chatgpt-search-message-ids', '["m0","PRIVATE_ID"]');
+      if (failure === 'role') card.setAttribute('data-message-author-role', 'user');
+      if (failure === 'changed-during-images') f.w.ChatArchiveMedia = { beginExport() {}, endExport() {}, preserve() {}, waitForImages: async () => { card.remove(); } };
+      await f.w.receive({ type: 'BEGIN_EXPORT', job: { format: 'html', filename: 'test.html', options: {} } });
+      await f.clock.tickAsync(100);
+      const status = (await f.w.receive({ type: 'PING' })).exportStatus;
+      assert.equal(status.state, 'error');
+      const diagnostic = clone(status.sourceDiagnostic);
+      assert.equal(diagnostic.reason, 'rendered-message-match-failed');
+      assert.equal(diagnostic.code, { missing: 'RENDERED_MESSAGE_NOT_LOADED', ambiguous: 'RENDERED_ID_AMBIGUOUS', role: 'RENDERED_ROLE_MISMATCH', 'changed-during-images': 'RENDERED_MESSAGE_NOT_LOADED' }[failure]);
+      assert.equal(diagnostic.phase, failure === 'changed-during-images' ? 'after-images' : 'before-images');
+      assert.equal(diagnostic.expectedMessages, 8); assert.equal(diagnostic.requiredRenderedMessages, 1);
+      if (failure === 'missing' || failure === 'changed-during-images') assert.deepEqual(diagnostic.missingMessagePositions, [2]);
+      const report = f.w.document.querySelector('.chat-archive-source-diagnostic pre').textContent;
+      assert.deepEqual(JSON.parse(report), diagnostic);
+      assert.doesNotMatch(report, /PRIVATE|SECRET|Unmapped|https:|Message |\bm[0-7]\b/);
+      assert.equal(f.sent.some(request => ['EXPORT_READY', 'EXPORT_PARTS_START'].includes(request.type)), false);
     } finally { f.close(); }
   }
 });
@@ -332,11 +433,13 @@ test('temporary chat never makes a backend request', async () => {
   } finally { f.close(); }
 });
 
-test('activity export explains page collection instead of silently omitting Working / Thinking', async () => {
+test('activity option no longer bypasses direct reading', async () => {
   const f = fixture();
   try {
-    f.w.fetch = () => { throw Error('No request expected'); };
-    assert.match((await f.api.collect({ ...options, includeActivity: true }, () => {})).fallback, /Working \/ Thinking/);
+    const calls = [];
+    f.w.fetch = async url => { calls.push(url); return json(url.endsWith('/session') ? {} : conversation()); };
+    const result = await f.api.collect({ ...options, includeActivity: true }, () => {});
+    assert.equal(result.data.messages.length, 2); assert.equal(calls.length, 2);
   } finally { f.close(); }
 });
 
@@ -365,7 +468,7 @@ test('BEGIN_EXPORT reaches existing download handoff once with direct status and
     const status = await f.w.receive({ type: 'PING' });
     assert.equal(status.activeExport, false);
     assert.equal(status.exportStatus.state, 'done');
-    assert.equal(status.exportStatus.collectionNotice, 'direct text export');
-    assert.match(f.w.document.querySelector('.chat-archive-progress-detail').textContent, /direct text export/);
+    assert.equal(status.exportStatus.collectionNotice, 'Direct MD export · no scrolling');
+    assert.match(f.w.document.querySelector('.chat-archive-progress-detail').textContent, /Direct MD export/);
   } finally { f.close(); }
 });

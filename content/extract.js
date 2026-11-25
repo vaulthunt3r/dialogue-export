@@ -1,4 +1,5 @@
 (function () {
+  if (globalThis.ChatArchiveExtractor) return;
   const isGemini = location.hostname === 'gemini.google.com';
   const modernSelector = '[data-user-message-bubble], [data-chatgpt-selection-message-id]';
   const activityHeader = '[class~="group/activity-header"]';
@@ -190,23 +191,28 @@
     return turn?.getAttribute('data-testid') || node.dataset.chatArchiveId || `message-${index + 1}`;
   }
 
-  function sourceIdOf(node) {
-    const attributes = ['data-message-id', 'data-chatgpt-selection-message-id'];
-    const direct = [node, ...node.querySelectorAll('[data-message-id], [data-chatgpt-selection-message-id]')];
+  function sourceIdentityOf(node) {
+    const attributes = ['data-message-id', 'data-chatgpt-selection-message-id', 'data-dil-source-message-id', 'data-dil-message-id'];
+    const direct = [node, ...node.querySelectorAll(attributes.map(name => `[${name}]`).join(','))];
     const ids = new Set(direct.flatMap(element => attributes.map(name => element.getAttribute(name)?.trim()).filter(Boolean)));
-    if (ids.size) return ids.size === 1 ? [...ids][0] : null;
+    if (ids.size) return ids.size === 1 ? { id: [...ids][0] } : { id: null, ambiguous: true };
     const turn = node.closest(turnSelector);
     for (let parent = node, depth = 0; parent && depth < 8; parent = parent.parentElement, depth++) {
       const value = parent.getAttribute('data-chatgpt-search-message-ids')?.trim();
       if (value) {
-        if (!value.startsWith('[')) return value;
-        try { const parsed = JSON.parse(value); return Array.isArray(parsed) && parsed.length === 1 && typeof parsed[0] === 'string' ? parsed[0] : null; }
-        catch (_) { return null; }
+        if (!value.startsWith('[')) return { id: value };
+        try {
+          const parsed = JSON.parse(value);
+          return Array.isArray(parsed) && parsed.length === 1 && typeof parsed[0] === 'string' && parsed[0].trim()
+            ? { id: parsed[0].trim() } : { id: null, ambiguous: true };
+        } catch (_) { return { id: null, ambiguous: true }; }
       }
       if (parent === turn || parent.matches('main, [role="main"]')) break;
     }
-    return null;
+    return { id: null };
   }
+
+  const sourceIdOf = node => sourceIdentityOf(node).id;
 
   function textWithLinks(source, markdown = false) {
     const clone = source.cloneNode(true);
@@ -252,7 +258,7 @@
   }
 
   function preserveCardLayouts(sourceElements, cloneElements) {
-    // Copy a small, inert presentation subset for thumbnail + text rows. Never
+    // Copy a small, inert presentation subset for rendered components. Never
     // carry page stylesheets, positioning, clipping or external CSS resources.
     const properties = ('color background-color font-family font-size font-weight font-style line-height letter-spacing text-align ' +
       'text-decoration-line text-decoration-style text-decoration-color border-radius ' +
@@ -261,6 +267,52 @@
       .concat(['top', 'right', 'bottom', 'left'].flatMap(side => ['width', 'style', 'color'].map(kind => `border-${side}-${kind}`)));
     const safe = value => value && !/[<>]|url\s*\(|var\s*\(|attr\s*\(|expression\s*\(|javascript:/i.test(value);
     const copies = new Map(sourceElements.map((element, index) => [element, cloneElements[index]]));
+    const components = new Set();
+    for (const element of sourceElements) {
+      if ((!components.has(element.parentElement) && !/^(card|box|row)$/.test(element.getAttribute('data-d-component') || '')) || element.closest('pre, code')) continue;
+      components.add(element);
+    }
+    for (const element of components) {
+      const target = copies.get(element);
+      if (!target) continue;
+      const computed = getComputedStyle(element);
+      target.removeAttribute('style');
+      if (computed.display === 'none' || ['hidden', 'collapse'].includes(computed.visibility)) {
+        target.setAttribute('data-export-hidden', ''); target.style.display = 'none'; continue;
+      }
+      for (const property of [...properties, 'flex-grow', 'flex-shrink', 'flex-basis']) {
+        const value = computed.getPropertyValue(property);
+        if (safe(value)) target.style.setProperty(property, value);
+      }
+      if (['flex', 'inline-flex', 'block', 'inline', 'inline-block'].includes(computed.display)) target.style.display = computed.display;
+      target.classList.add('chat-archive-component');
+      target.style.boxSizing = 'border-box';
+      target.style.minWidth = '0';
+      target.style.maxWidth = '100%';
+      // Keep authored percentages responsive. Computed pixels would distort a
+      // chart when its export is narrower than the original conversation.
+      const width = element.style.width.trim();
+      if (/^(?:\d+(?:\.\d+)?|\.\d+)%$/.test(width) && parseFloat(width) <= 100) target.style.width = width;
+      else if (width || element.hasAttribute('data-d-has-width')) {
+        const pixels = parseFloat(computed.width);
+        if (/px$/.test(computed.width) && pixels >= 0 && pixels <= 1600) target.style.width = computed.width;
+      }
+      // Explicit, empty colored boxes are chart tracks/fills. Keep their height
+      // without constraining text containers or copying overflow/position rules.
+      if (!element.textContent.trim() && !element.querySelector('img,svg,canvas,video,iframe') &&
+          (element.style.height || element.hasAttribute('data-d-has-height'))) {
+        const pixels = parseFloat(computed.height);
+        if (/px$/.test(computed.height) && pixels > 0 && pixels <= 600) target.style.height = computed.height;
+      }
+      if (!components.has(element.parentElement)) {
+        for (let parent = element; parent; parent = parent.parentElement) {
+          const background = getComputedStyle(parent).backgroundColor;
+          if (background && background !== 'transparent' && background !== 'rgba(0, 0, 0, 0)' && safe(background)) {
+            target.style.backgroundColor = background; break;
+          }
+        }
+      }
+    }
     for (const row of sourceElements) {
       if (row.children.length !== 2 || row.closest('pre, code, [class~="group/generated-image-gallery-controls"]')) continue;
       const style = getComputedStyle(row);
@@ -322,6 +374,17 @@
     if (preserveLayout) preserveCardLayouts([source, ...sourceElements], [clone, ...cloneElements]);
     if (includeMedia) window.ChatArchiveMedia?.preserve(source, clone, { owner: mediaOwner, excludedRoots: mediaExclusions(source) });
     clone.querySelectorAll('[data-export-hidden]').forEach(element => element.remove());
+    // ChatGPT table edge overlays have inline measured dimensions, but their
+    // absolute positioning lives in a site stylesheet. Without that stylesheet
+    // an empty overlay becomes a full table-height blank block in the export.
+    // Match only known direct table decorations: empty chart boxes are content.
+    clone.querySelectorAll('[data-d-component="table"]').forEach(frame => {
+      if (!frame.querySelector(':scope > [data-d-table-viewport] > table')) return;
+      [...frame.children].forEach(element => {
+        if ([...element.classList].some(name => name.startsWith('Edges-')) && !element.textContent.trim() &&
+            !element.querySelector('table,img,picture,svg,canvas,video,audio,iframe,object,embed')) element.remove();
+      });
+    });
 
     const sourceTextareas = [...source.querySelectorAll('textarea')];
     [...clone.querySelectorAll('textarea')].forEach((textarea, index) => {
@@ -388,7 +451,7 @@
       target.replaceWith(block);
     });
 
-    clone.querySelectorAll('.chat-archive-card button').forEach(button => {
+    clone.querySelectorAll('.chat-archive-card button, .chat-archive-component button').forEach(button => {
       if (!button.textContent.trim()) return;
       const label = document.createElement('span');
       label.className = button.className;
@@ -452,18 +515,22 @@
     nodes: messageNodes,
     idOf,
     sourceIdOf,
+    sourceIdentityOf,
     roleOf,
     contentRoot,
     mediaExclusions,
     payloadSize,
     maxPayloadCharacters,
     metadata() { return { title: title(), provider: provider(), url: location.href, exportedAt: new Date().toISOString() }; },
-    snapshot({ includeLinks = true, includeTimestamps = false, includeActivity = false, selectedOnly = false, outputFormat = null, includeUserImages = true, includeAssistantImages = true, includeSourceIds = false } = {}) {
+    snapshot({ includeLinks = true, includeTimestamps = false, includeActivity = false, selectedOnly = false, outputFormat = null, includeUserImages = true, includeAssistantImages = true, includeSourceIds = false, sourceMessageIds = null } = {}) {
       const nodes = messageNodes();
       const activities = !isGemini && includeActivity ? activitiesByMessage(nodes, includeLinks) : new Map();
       const identifiers = new Set();
       let characters = 0;
       return nodes.map((node, index) => {
+        // In a hybrid export only these exact messages come from the page.
+        // API-only neighbours need no page key and must not enter media capture.
+        if (sourceMessageIds && !sourceMessageIds.includes(sourceIdOf(node))) return null;
         const id = idOf(node, index);
         if (identifiers.has(id)) throw new Error('A message identifier is shared by multiple messages. This interface is ambiguous; export was stopped to avoid losing content.');
         identifiers.add(id);

@@ -1,0 +1,18 @@
+<card>
+  <svg viewBox="0 0 340 160" width="100%" xmlns="http://www.w3.org/2000/svg">
+    <g fill="none" stroke="#64748b" stroke-width="1.5">
+      <rect x="20" y="50" width="47" height="78" rx="7" fill="#64748b" fill-opacity=".08"/>
+      <rect x="26" y="59" width="35" height="59" rx="2"/>
+      <rect x="216" y="45" width="112" height="78" rx="6" fill="#64748b" fill-opacity=".08"/>
+      <rect x="223" y="52" width="98" height="64" rx="2"/>
+    </g>
+    <path d="M44 43 V19" stroke="#16a34a" stroke-width="2" stroke-dasharray="3 3"/>
+    <text x="44" y="12" font-size="11" fill="#16a34a" text-anchor="middle">4G / LTE</text>
+    <path d="M77 86 H205" stroke="#16a34a" stroke-width="2" stroke-dasharray="5 4"/>
+    <path d="M198 81 L205 86 L198 91" stroke="#16a34a" fill="none" stroke-width="2"/>
+    <text x="141" y="74" font-size="12" fill="#16a34a" text-anchor="middle">Wi-Fi</text>
+    <text x="141" y="104" font-size="10" fill="currentColor" text-anchor="middle">Local network</text>
+    <text x="44" y="146" font-size="11" fill="currentColor" text-anchor="middle">Phone</text>
+    <text x="272" y="146" font-size="11" fill="currentColor" text-anchor="middle">Tablet</text>
+  </svg>
+</card>

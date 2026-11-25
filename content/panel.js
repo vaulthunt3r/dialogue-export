@@ -1,5 +1,6 @@
 /* Compact controls use only measured free space; they never resize the chat. */
 (function () {
+  if (globalThis.ChatArchivePanel) return;
   let dock, launchers, launcher, badge, frame, hint, timer, opened = false, frameHeight = 300;
   const observers = [];
   function rect(node) {
@@ -76,6 +77,9 @@
   }
   function mount() {
     if (dock?.isConnected || !document.body || !browser.runtime.getURL) return;
+    clearInterval(timer); observers.forEach(observer => observer.disconnect()); observers.length = 0;
+    frame?.remove(); frame = null; opened = false;
+    document.querySelectorAll('.chat-archive-dock').forEach(node => node.remove());
     dock = document.createElement('aside'); dock.className = 'chat-archive-dock';
     dock.setAttribute('aria-label', 'Dialogue Export');
     launchers = document.createElement('div'); launchers.className = 'chat-archive-launchers';
@@ -102,7 +106,7 @@
       const observer = new ResizeObserver(layout); observer.observe(document.documentElement); observers.push(observer);
     }
     // Also catches host-app sidebar changes and SPA layouts without observing every text mutation.
-    timer = setInterval(() => { layout(); window.ChatArchivePanel.theme(window.ChatArchivePanel.pageTheme?.() || 'light'); }, 1200);
+    timer = setInterval(() => { if (!dock?.isConnected) mount(); else layout(); window.ChatArchivePanel.theme(window.ChatArchivePanel.pageTheme?.() || 'light'); }, 1200);
   }
   window.ChatArchivePanel = {
     mount, collapse, layout,
@@ -111,8 +115,8 @@
     theme(theme) { if (dock && dock.dataset.theme !== theme) dock.dataset.theme = theme; },
     status(state) {
       if (!launcher) return;
-      badge.textContent = state === 'running' ? '…' : state === 'error' ? '!' : state === 'done' ? '+' : '';
-      const label = state === 'running' ? 'Export in progress' : state === 'error' ? 'Export stopped with an error' : state === 'done' ? 'Export completed' : '';
+      badge.textContent = state === 'decision' ? '?' : state === 'running' ? '…' : state === 'error' ? '!' : state === 'done' ? '+' : '';
+      const label = state === 'decision' ? 'Choose whether to save or discard the stopped export' : state === 'running' ? 'Export in progress' : state === 'error' ? 'Export stopped with an error' : state === 'done' ? 'Export completed' : '';
       launcher.setAttribute('aria-label', `Open Dialogue Export${label ? ' — ' + label : ''}`);
     }
   };
@@ -121,6 +125,6 @@
   window.addEventListener('resize', layout);
   window.addEventListener('scroll', scheduleLayout, { passive: true, capture: true });
   document.addEventListener('visibilitychange', layout);
-  window.addEventListener('pagehide', () => { clearInterval(timer); clearTimeout(scheduled); scheduled = 0; observers.forEach(observer => observer.disconnect()); dock?.remove(); });
+  window.addEventListener('pagehide', () => { clearInterval(timer); clearTimeout(scheduled); scheduled = 0; observers.forEach(observer => observer.disconnect()); observers.length = 0; opened = false; frame = null; dock?.remove(); });
   window.addEventListener('pageshow', event => { if (event.persisted) mount(); });
 })();

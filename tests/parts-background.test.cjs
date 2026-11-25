@@ -66,9 +66,14 @@ test('missing image access makes no request; granting access lets the same reque
   const f = fixture(options), sender = { url: 'https://chatgpt.com/c/synthetic', tab: { id: 3 }, frameId: 0 };
   const request = { type: 'PAGE_IMAGE_READ', id: 'image-1', url: 'https://images.openai.com/static-rsc-4/example' };
   try {
+    assert.equal((await f.send({ type: 'IMAGE_ACCESS_CHECK' }, sender)).granted, false);
+    for (const invalid of [{ ...sender, frameId: 2 }, { ...sender, url: 'https://evil.example' }, { ...sender, tab: {} }]) {
+      assert.equal((await f.send({ type: 'IMAGE_ACCESS_CHECK' }, invalid)).code, 'IMAGE_REQUEST_REJECTED');
+    }
     assert.equal((await f.send(request, sender)).code, 'IMAGE_PERMISSION_REQUIRED');
     assert.equal(calls, 0); assert.equal(f.clock.countTimers(), 0);
     options.imagePermission = true;
+    assert.equal((await f.send({ type: 'IMAGE_ACCESS_CHECK' }, sender)).granted, true); assert.equal(calls, 0);
     assert.equal((await f.send(request, sender)).ok, true); assert.equal(calls, 1);
     assert.equal((await f.send({ type: 'IMAGE_ACCESS_OPEN' }, { ...sender, url: 'https://evil.example' })).ok, false);
     assert.equal((await f.send({ type: 'IMAGE_ACCESS_OPEN' }, sender)).ok, true);
@@ -150,6 +155,23 @@ test('HTML parts wait for completion, use numbered Downloads filenames and relea
     for (let index = 1; index <= 2; index++) assert.equal((await f.send({ type: 'EXPORT_PARTS_SAVE', id, index })).ok, true);
     assert.deepEqual(f.files.map(file => file.filename), ['test-part-001-of-002.html', 'test-part-002-of-002.html']);
     assert.ok(f.files.every(file => file.saveAs === false)); assert.equal(f.revoked.length, 2);
+    assert.equal((await f.store.allJobs()).length, 0);
+  } finally { f.close(); }
+});
+
+test('single and staged partial handoffs use marked filenames and partial metadata', async () => {
+  const f = fixture();
+  try {
+    const partialExport = { reason: 'image-error', messages: 1, totalMessages: 10 };
+    const data = { messages: [{ order: 0, html: '<p>Complete</p>' }], partialExport };
+    assert.equal((await f.send({ type: 'EXPORT_READY', job: { format: 'html', filename: 'single.html', options: {} }, data })).ok, true);
+    assert.equal(f.files[0].filename, 'single-partial.html');
+    const { id } = await f.send({ type: 'EXPORT_PARTS_START', job: { format: 'html', filename: 'staged.html', options: {} } });
+    await f.send({ type: 'EXPORT_PARTS_STAGE', id, data: { messages: data.messages } });
+    assert.equal((await f.send({ type: 'EXPORT_PARTS_SEAL', id, summary: { parts: 1, messages: 1, partialExport } })).ok, true);
+    assert.equal((await f.store.part(id, 1)).data.partialExport.reason, 'image-error');
+    assert.equal((await f.send({ type: 'EXPORT_PARTS_SAVE', id, index: 1 })).ok, true);
+    assert.equal(f.files[1].filename, 'staged-partial-part-001-of-001.html');
     assert.equal((await f.store.allJobs()).length, 0);
   } finally { f.close(); }
 });

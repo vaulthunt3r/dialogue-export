@@ -1,5 +1,6 @@
 (function () {
   'use strict';
+  if (globalThis.ChatArchiveMessageTimestamps) return;
 
   // Read only data properties. Do not call page functions or accessors.
   function own(object, key) {
