@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const { JSDOM } = require('jsdom');
+const dilImages = require('./fixtures/dil-images.cjs');
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const ID = '12345678-1234-1234-1234-123456789abc', URL = `https://chatgpt.com/c/${ID}`;
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC9sAAAAASUVORK5CYII=', 'base64');
@@ -33,6 +34,99 @@ function fixture() {
 }
 function options(format = 'html') { return { outputFormat: format, includeLinks: true }; }
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
+
+test('DIL search illustrations and 21 generated images export together, including an unmounted answer', async () => {
+  for (const outputFormat of ['html', 'pdf']) for (const renderedFallback of [false, true]) {
+    const f = fixture(); try {
+      const { source, metadata, urls } = dilImages();
+      const textMessage = (id, role, text, extra = {}) => ({ id, author: { role }, status: 'finished_successfully', content: { content_type: 'text', parts: [text] }, ...extra });
+      const messages = [imageMessage('question', 'user', 'file-service://user-image'),
+        textMessage('illustrations', 'assistant', source + '\n\n' + read('tests/fixtures/static-prompt.txt'), { metadata: renderedFallback ? {} : metadata })];
+      for (let i = 0; i < 21; i++) messages.push(textMessage(`q${i}`, 'user', `Generate image ${i}`),
+        imageMessage(`g${i}`, 'tool', `file-service://generated-${i}`), textMessage(`a${i}`, 'assistant', `Image ${i} ready`));
+      const saved = chain(messages), downloads = [];
+      f.w.fetch = async (url, init) => {
+        if (url.endsWith('/session')) return json({ accessToken: 'PRIVATE_TOKEN' });
+        if (url.endsWith(`/conversation/${ID}`)) return json(saved);
+        const pointer = url.match(/\/files\/([\w-]+)\/download$/);
+        if (pointer) return json({ download_url: `https://images.example.com/${pointer[1]}.png` });
+        assert.ok(urls.includes(url) || /^https:\/\/images.example.com\/(user-image|generated-\d+)\.png$/.test(url));
+        assert.equal(init.headers.authorization, undefined); downloads.push(url);
+        return new Response(png, { headers: { 'content-type': 'image/png' } });
+      };
+      let pageReads = 0;
+      const result = await f.w.ChatArchiveApi.collect({ outputFormat }, () => {}, () => {}, undefined, async (expected, needed) => {
+        pageReads++; assert.equal(renderedFallback, true);
+        assert.deepEqual(Array.from(needed), ['illustrations']);
+        assert.deepEqual(Array.from(expected, m => m.id), messages.map(m => m.id));
+        return new Map([['illustrations', { html: '<p>Before illustrations</p>' + urls.map(() => `<img src="data:image/png;base64,${png.toString('base64')}">`).join('') + '<p>After illustrations</p>' }]]);
+      });
+      assert.ok(result.data, result.fallback);
+      assert.equal(pageReads, Number(renderedFallback));
+      assert.equal(result.data.collectionMethod, renderedFallback ? 'chatgpt-api-rendered' : 'chatgpt-api');
+      assert.deepEqual(Array.from(result.data.messages, m => m.id), messages.map(m => m.id));
+      const doc = new JSDOM(f.w.ChatArchiveRenderers.html(result.data, {}));
+      try {
+        const contentImages = doc.window.document.querySelectorAll('img:not([data-export-icon])');
+        assert.equal(contentImages.length, 26);
+        for (const image of contentImages) assert.deepEqual(Buffer.from(image.src.split(',')[1], 'base64'), png);
+        assert.equal(doc.window.document.querySelectorAll('[data-export-icon]').length, renderedFallback ? 0 : 1);
+        assert.match(doc.window.document.body.textContent, /Before illustrations[\s\S]*After illustrations[\s\S]*Image 20 ready/);
+        if (!renderedFallback) {
+          assert.match(doc.window.document.body.textContent, /First paragraph\.\n\nSecond paragraph with two  spaces\./);
+          assert.equal(doc.window.document.querySelector('[style*="white-space:pre-wrap"]').style.whiteSpace, 'pre-wrap');
+        }
+        assert.doesNotMatch(doc.window.document.documentElement.outerHTML, /PRIVATE_TOKEN|AsyncImage|export-image-placeholder/);
+      } finally { doc.window.close(); }
+      assert.equal(downloads.length, renderedFallback ? 22 : 26);
+      assert.deepEqual(downloads.filter(url => urls.includes(url)), renderedFallback ? [] : urls);
+    } finally { f.close(); }
+  }
+});
+
+test('mixed text, formatted cards, source links, SVG and user/assistant images export together without page content', async () => {
+  for (const outputFormat of ['html', 'pdf']) for (const [includeUserImages, includeAssistantImages] of [[true, true], [false, true], [true, false], [false, false]]) {
+    const f = fixture();
+    try {
+      const r = chain([
+        imageMessage('question', 'user', 'file-service://mixed-user'),
+        { id: 'answer', author: { role: 'assistant' }, status: 'finished_successfully', content: { content_type: 'text', parts: [
+          'Before\n\n' + read('tests/fixtures/formatted-metrics.txt') + '\n\n' + read('tests/fixtures/static-diagram.txt') +
+          '\n\n<AsyncImage src="https://images.example.com/answer.png" alt="Answer image"/>\n\n<Cite ref="turn7search0"/>\n\n|A|B|\n|-|-|\n|1|2|\n\nAfter'
+        ] }, metadata: { content_references: [{ type: 'grouped_webpages', items: [{ title: 'Documentation', url: 'https://example.com/docs', refs: ['turn7search0'] }] }] } }
+      ]);
+      const calls = [];
+      f.w.fetch = async (url, init) => {
+        calls.push({ url, init });
+        if (url.endsWith('/session')) return json({ accessToken: 'PRIVATE_TOKEN' });
+        if (url.endsWith(`/conversation/${ID}`)) return json(r);
+        if (url.endsWith('/files/mixed-user/download')) return json({ download_url: 'https://images.example.com/user.png' });
+        assert.ok(['https://images.example.com/user.png', 'https://images.example.com/answer.png'].includes(url));
+        assert.equal(init.credentials, 'omit'); assert.equal(init.headers.authorization, undefined);
+        return new Response(png, { headers: { 'content-type': 'image/png' } });
+      };
+      let pageReads = 0;
+      const { data, fallback } = await f.w.ChatArchiveApi.collect({ outputFormat, includeUserImages, includeAssistantImages }, () => {}, () => {}, undefined, async () => { pageReads++; throw Error('No rendered-page fallback expected'); });
+      assert.ok(data, fallback); assert.equal(data.collectionMethod, 'chatgpt-api'); assert.equal(pageReads, 0);
+      const doc = new JSDOM(f.w.ChatArchiveRenderers.html(data, {})).window.document;
+      assert.equal(doc.images.length, Number(includeUserImages) + 2 * Number(includeAssistantImages));
+      assert.equal(doc.querySelectorAll('[data-d-component="grid-item"]').length, 2);
+      assert.equal(doc.querySelectorAll('table').length, 1);
+      assert.match(doc.body.textContent.replace(/\u00a0/g, ' '), /12 500 units/);
+      assert.match(doc.body.textContent, /Before[\s\S]*After/);
+      assert.equal(doc.querySelector('a').href, 'https://example.com/docs');
+      assert.equal(calls.some(call => call.url.endsWith('/user.png')), includeUserImages);
+      assert.equal(calls.some(call => call.url.endsWith('/answer.png')), includeAssistantImages);
+      for (const img of doc.images) {
+        if (img.src.startsWith('data:image/svg+xml;')) {
+          const xml = new f.w.DOMParser().parseFromString(Buffer.from(img.src.split(',')[1], 'base64').toString('utf8'), 'image/svg+xml');
+          assert.equal(xml.querySelector('parsererror'), null); assert.equal(xml.querySelectorAll('rect').length, 4);
+        } else assert.deepEqual(Buffer.from(img.src.split(',')[1], 'base64'), png);
+      }
+      assert.doesNotMatch(doc.body.textContent, /toLocaleString|\{#each|PRIVATE_TOKEN/);
+    } finally { f.close(); }
+  }
+});
 
 test('image loader distinguishes HTTP, network, size, format and decoding failures without private details', async () => {
   const cases = [

@@ -1,0 +1,9 @@
+<box border radius="lg" padding={3} gap={2}>
+  <row align="center"><icon name="check-circle" color="success" size="lg"/><box flex={1}>Local connection</box><caption>OK</caption></row>
+  <row align="center"><icon name="check-circle" color="success" size="lg"/><box flex={1}>Service connection</box><caption>OK</caption></row>
+  <divider/>
+  <row align="center"><icon name="alert-triangle" color="warning" size="lg"/><box flex={1}>**Service stopped**<caption>The device is not published.</caption></box><badge color="warning">Error</badge></row>
+  <row align="center"><icon name="alert-triangle" color="warning" size="lg"/><box flex={1}>**Public profile**<caption>Discovery is restricted.</caption></box></row>
+  <divider/>
+  <caption>Suggested fix: review the service and trusted network profile.</caption>
+</box>

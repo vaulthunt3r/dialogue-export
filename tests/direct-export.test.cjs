@@ -88,6 +88,25 @@ test('activity off excludes summaries; consecutive turns and standalone activity
   const g = fixture(only); try { const { value, error } = await g.collect({ outputFormat: 'json', includeActivity: true }); assert.ifError(error); assert.equal(value.messages[0].activities[0].title, 'Summary only'); assert.equal(value.messages[0].html, ''); } finally { g.close(); }
 });
 
+test('a singular source citation in an unmounted answer exports directly with all messages and no page scrolling', async () => {
+  for (const outputFormat of ['html', 'pdf', 'json']) {
+    const raw = conversation();
+    raw.mapping.m1.message.content.parts = ['Before\n\n- **Install** the file. <Cite ref="turn7search0"/>\n\nAfter'];
+    raw.mapping.m1.message.metadata = { content_references: [{ type: 'grouped_webpages', items: [
+      { title: 'Documentation', url: 'https://example.com/docs', refs: ['turn7search0'] }
+    ] }] };
+    const f = fixture(raw); try {
+      const { value, error } = await f.collect({ outputFormat, includeLinks: true });
+      assert.ifError(error); assert.equal(value.collectionMethod, 'chatgpt-api');
+      assert.equal(value.renderedMessages, undefined); assert.equal(value.messages.length, 40);
+      assert.deepEqual(Array.from(value.messages, message => message.id), Array.from({ length: 40 }, (_, i) => `m${i}`));
+      assert.match(value.messages[1].html, /https:\/\/example.com\/docs/); assert.match(value.messages[1].html, /Documentation/);
+      assert.match(value.messages[1].html, /Before[\s\S]*After/); assert.doesNotMatch(value.messages[1].html, /Cite|Source link unavailable/);
+      assert.equal(f.scrollWrites, 0); assert.equal(f.requests.length, 2);
+    } finally { f.close(); }
+  }
+});
+
 test('unsupported unmounted cards and server failures stop without DOM scrolling or partial handoff', async () => {
   for (const reason of ['card', 'server', 'branch']) {
     const raw = conversation(); if (reason === 'card') raw.mapping.m1.message.content.parts = ['<AsyncImage query="Unmapped reference"/>'];

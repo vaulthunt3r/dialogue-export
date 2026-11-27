@@ -311,7 +311,7 @@
     resourceUsage: () => resources ? { assets: resources.entries.size, pixels: resources.pixels, imageCharacters: resources.characters } : { assets: 0, pixels: 0, imageCharacters: 0 },
     normalizeGalleries,
     waitForImages,
-    preserve(source, clone, { owner = 'unscoped', excludedRoots = [] } = {}) {
+    preserve(source, clone, { owner = 'unscoped', excludedRoots = [], includeImages = true } = {}) {
       const originals = [...source.querySelectorAll('img,svg,canvas')];
       const copies = [...clone.querySelectorAll('img,svg,canvas')];
       const indexes = { img: 0, svg: 0, canvas: 0 };
@@ -321,6 +321,24 @@
         if (!copy || !clone.contains(copy)) return;
         if (!exportableMedia(element, excludedRoots)) { copy.remove(); return; }
         const svg = element.localName === 'svg';
+        // Authored component icons convey status inside the answer. They are
+        // text decoration, unlike toolbar SVGs or downloadable answer images.
+        if (svg && element.getAttribute('data-d-component') === 'icon' &&
+            !element.closest('button, [role="button"], [class~="group/activity-header"]')) {
+          if (element.querySelectorAll('*').length > 256 || element.outerHTML.length > 65536) throw new Error('This content icon exceeds the static rendering limit. No file was saved.');
+          const result = svgImage(element);
+          if (!result.data || result.omitted) throw new Error('This content icon contains unsupported visual elements. No file was saved.');
+          const style = getComputedStyle(element), bounds = element.getBoundingClientRect();
+          const dimension = (size, fallback) => size > 0 && size <= 128 ? size : fallback;
+          const width = dimension(bounds.width || parseFloat(style.width), dimension(parseFloat(style.fontSize), 16));
+          const height = dimension(bounds.height || parseFloat(style.height), width);
+          const image = document.createElement('img');
+          image.src = result.data; image.alt = element.getAttribute('aria-label') || element.querySelector('title')?.textContent || '';
+          image.setAttribute('data-export-icon', ''); image.setAttribute('data-d-component', 'icon');
+          image.style.cssText = `display:inline-block;width:${width}px;height:${height}px;flex-shrink:0;vertical-align:middle;margin:0`;
+          copy.replaceWith(image); return;
+        }
+        if (!includeImages) { copy.remove(); return; }
         let pixels = (element.naturalWidth || element.width || 0) * (element.naturalHeight || element.height || 0);
         if (svg) {
           const bounds = element.getBoundingClientRect();

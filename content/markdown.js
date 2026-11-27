@@ -41,19 +41,73 @@
       } catch (_) { return false; }
     }) || urls[0];
   }
+  // Describe only image-reference structure when resolution fails. Never emit
+  // queries, titles, URLs, IDs, arbitrary field names or unrelated metadata.
+  function imageReferenceDiagnostic(env, query) {
+    const fields = new Set('type images image image_result image_results image_search_results image_search_query query queries prompt_text alt title url href content_url original_content_url thumbnail_url image_url asset_pointer file_id result results items refs matched_text safe_urls async_image async_images image_references search_results model_dil_v2 code constants appData opGenui componentResults state is_loading'.split(' '));
+    const types = new Set('image images image_v2 image_group image_gen async_image image_search webpage webpages grouped_webpages entity file dil'.split(' '));
+    let remaining = 160, truncated = false;
+    const describe = (value, depth = 0, key = '') => {
+      if (remaining-- <= 0) { truncated = true; return { type: 'omitted' }; }
+      if (value === null) return { type: 'null' };
+      if (Array.isArray(value)) {
+        const sample = value.slice(0, 4), limited = depth >= 5;
+        if (limited || value.length > sample.length) truncated = true;
+        const items = [];
+        if (!limited) for (const item of sample) {
+          if (remaining <= 0) { truncated = true; break; }
+          items.push(describe(item, depth + 1));
+        }
+        return { type: 'array', length: value.length, ...(limited ? {} : { items }) };
+      }
+      if (typeof value === 'object') {
+        const keys = Object.keys(value), known = keys.filter(name => fields.has(name));
+        if (depth >= 5) { truncated = true; return { type: 'object', fieldCount: keys.length }; }
+        const descriptions = {};
+        for (const name of known) {
+          if (remaining <= 0) { truncated = true; break; }
+          descriptions[name] = describe(value[name], depth + 1, name);
+        }
+        return { type: 'object', otherFields: keys.length - known.length, fields: descriptions };
+      }
+      if (typeof value !== 'string') return { type: ['number', 'boolean', 'undefined'].includes(typeof value) ? typeof value : 'other' };
+      const result = { type: 'string' };
+      if (key === 'type') result.category = types.has(value) ? value : 'other';
+      if (['query', 'image_search_query', 'prompt_text', 'title', 'alt'].includes(key)) {
+        result.matchesQuery = value === query;
+        result.matchesTrimmedQuery = typeof query === 'string' && value.trim() === query.trim();
+      }
+      if (['url', 'href', 'content_url', 'original_content_url', 'thumbnail_url', 'image_url', 'asset_pointer'].includes(key)) {
+        result.referenceKind = /^https?:\/\//i.test(value) ? 'http' : /^(file-service|sediment):\/\//.test(value) ? 'file' : value.startsWith('data:image/') ? 'data-image' : 'other';
+      }
+      return result;
+    };
+    const references = describe(env.references);
+    const metadata = Object.fromEntries(Object.entries(env.metadata || {}).filter(([name]) => fields.has(name)));
+    return { version: 1, references, metadata: describe(metadata), truncated };
+  }
   function componentReference(name, attrs, env) {
-    const failure = () => { throw new window.ChatArchiveComponents.Unsupported(); };
+    const failure = code => {
+      const error = new window.ChatArchiveComponents.Unsupported(code);
+      if (name === 'AsyncImage' && ['IMAGE_REFERENCE_NOT_FOUND', 'IMAGE_REFERENCE_AMBIGUOUS'].includes(code)) {
+        error.imageReferenceDiagnostic = imageReferenceDiagnostic(env, attrs.query);
+      }
+      throw error;
+    };
     const references = env.references || [], safeUrl = value => typeof value === 'string' && /^https?:\/\//i.test(value) ? value : null;
     if (name === 'Entity') {
-      if (typeof attrs.value !== 'string') failure();
+      if (typeof attrs.value !== 'string') failure('ENTITY_VALUE_INVALID');
       const ref = references.find(ref => ref.type === 'entity' && (ref.name || ref.entity_data?.name) === attrs.value);
       const url = safeUrl(ref?.url || ref?.entity_data?.website_url);
       return url && env.includeLinks ? `<a href="${escape(url)}" rel="noopener noreferrer">${escape(attrs.value)}</a>` : escape(attrs.value);
     }
     if (name === 'Cite') {
       if (!env.includeLinks) return '';
-      const ids = Array.isArray(attrs.refs) ? attrs.refs : [attrs.refs];
-      if (!ids.length || ids.length > 64 || ids.some(id => typeof id !== 'string')) failure();
+      // Saved answers use both a single ref="..." and refs={...}.
+      // Keep an explicitly supplied refs value authoritative, including errors.
+      const refs = Object.hasOwn(attrs, 'refs') ? attrs.refs : attrs.ref;
+      const ids = Array.isArray(refs) ? refs : [refs];
+      if (!ids.length || ids.length > 64 || ids.some(id => typeof id !== 'string')) failure('CITATION_REFS_INVALID');
       const urls = new Map(); let missing = false;
       for (const id of ids) {
         let found = false;
@@ -78,7 +132,7 @@
     if (!env.includeImages) return '';
     let url = safeUrl(attrs.src || attrs.url);
     if (!url) {
-      if (typeof attrs.query !== 'string') failure();
+      if (typeof attrs.query !== 'string') failure('IMAGE_QUERY_MISSING');
       const matches = new Set();
       for (const ref of references) {
         if (!['image', 'images', 'image_v2', 'image_group'].includes(ref.type) || !Array.isArray(ref.images)) continue;
@@ -91,7 +145,35 @@
           if (exact && candidate) matches.add(candidate);
         }
       }
-      if (matches.size !== 1) failure(); url = [...matches][0];
+      // Newer saved answers put search-image results in DIL appData, either on
+      // message metadata or on its `dil` reference. safe_urls alone cannot tell
+      // an image from its source page or associate it with a particular card.
+      if (!env.dilImages) {
+        env.dilImages = new Map();
+        const bundles = new Set([env.metadata?.model_dil_v2,
+          ...references.filter(ref => ref?.type === 'dil').map(ref => ref.model_dil_v2)].filter(Boolean));
+        if (bundles.size <= 64) for (const bundle of bundles) {
+          const results = bundle.appData?.opGenui?.componentResults;
+          if (!results || typeof results !== 'object' || Array.isArray(results)) continue;
+          for (const binding of window.ChatArchiveComponents.imageBindings(bundle)) {
+            if (!env.dilImages.has(binding.query)) env.dilImages.set(binding.query, new Set());
+            const candidates = env.dilImages.get(binding.query);
+            let id = binding.id;
+            if (!Object.hasOwn(results, id) && id.startsWith('[')) {
+              try { const ids = JSON.parse(id); if (Array.isArray(ids) && ids.length === 1 && typeof ids[0] === 'string') id = ids[0]; } catch (_) {}
+            }
+            const result = Object.hasOwn(results, id) ? results[id] : null;
+            const images = result?.state?.images;
+            if (result?.componentName !== 'AsyncImage' || result.state?.is_loading !== false ||
+                (result.status && result.status !== 'resolved') || !Array.isArray(images) || images.length !== 1) { candidates.add(null); continue; }
+            const candidate = images[0] && safeUrl(referenceImageUrl(images[0], false, true));
+            candidates.add(candidate || null);
+          }
+        }
+      }
+      for (const candidate of env.dilImages.get(attrs.query) || []) matches.add(candidate);
+      if (matches.has(null)) failure('IMAGE_REFERENCE_NOT_FOUND');
+      if (matches.size !== 1) failure(matches.size ? 'IMAGE_REFERENCE_AMBIGUOUS' : 'IMAGE_REFERENCE_NOT_FOUND'); url = [...matches][0];
     }
     const alt = typeof attrs.alt === 'string' ? attrs.alt : 'Image';
     const placeholder = `<span class="export-image-placeholder" data-export-image="${env.images.length}">${escape(alt)}</span>`;
@@ -113,6 +195,7 @@
       },
       reference: (name, attrs) => componentReference(name, attrs, env),
       sequence(nodes, scope, limits, inlineOnly = false) {
+        scope = Object.assign(Object.create(null), scope);
         let source = '';
         for (const node of nodes) {
           if (node.type === 'text') {
@@ -194,9 +277,9 @@
   };
   window.ChatArchiveMarkdown = {
     referenceImageUrl,
-    render(source, { assets = [], includeLinks = true, includeImages = true, allowComponents = false, references = [] } = {}) {
+    render(source, { assets = [], includeLinks = true, includeImages = true, allowComponents = false, references = [], metadata = {} } = {}) {
       if (/[\u0001\u0002]/.test(source)) throw new Error('The message contains unsupported control characters. No file was saved.');
-      const env = { assets, images: [], slots: [], slotCharacters: 0, includeLinks, includeImages, allowComponents, references, componentCount: 0, unavailableCitations: 0 };
+      const env = { assets, images: [], slots: [], slotCharacters: 0, includeLinks, includeImages, allowComponents, references, metadata, componentCount: 0, unavailableCitations: 0 };
       const html = parser.render(source, env);
       return { html, images: env.images, componentCount: env.componentCount, unavailableCitations: env.unavailableCitations };
     }

@@ -1,0 +1,16 @@
+<style>
+  .status-card {display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid #ddd;border-radius:12px;color:#111;background:#fcfcfc;font:16px/26px Arial}
+  .status-card [data-d-component="row"] {display:flex;align-items:center}
+  .status-card .label {display:flex;flex:1;flex-direction:column;margin-left:8px}
+  .status-card [data-d-component="caption"] {color:#666;font-size:14px}
+  .status-card [data-d-component="divider"] {background:rgba(0,0,0,.1);background-clip:content-box;box-sizing:content-box;height:1px;padding:8px 0;align-self:stretch}
+</style>
+<div data-d-component="box" class="status-card">
+  <div data-d-component="row"><svg data-d-component="icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:rgb(0,122,51);font-size:18px"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6" stroke-width="2"/></svg><div data-d-component="box" class="label">Local connection</div><span data-d-component="caption">OK</span></div>
+  <div data-d-component="row"><svg data-d-component="icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:rgb(0,122,51);font-size:18px"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6" stroke-width="2"/></svg><div data-d-component="box" class="label">Service connection</div><span data-d-component="caption">OK</span></div>
+  <div data-d-component="divider"></div>
+  <div data-d-component="row"><svg data-d-component="icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:rgb(180,65,0);font-size:18px"><path d="M12 3 22 21H2ZM12 9v5m0 3v.1" stroke-width="2"/></svg><div data-d-component="box" class="label"><b>Service stopped</b><span data-d-component="caption">The device is not published.</span></div><span data-d-component="badge">Error</span></div>
+  <div data-d-component="row"><svg data-d-component="icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:rgb(180,65,0);font-size:18px"><path d="M12 3 22 21H2ZM12 9v5m0 3v.1" stroke-width="2"/></svg><div data-d-component="box" class="label"><b>Public profile</b><span data-d-component="caption">Discovery is restricted.</span></div></div>
+  <div data-d-component="divider"></div>
+  <span data-d-component="caption">Suggested fix: review the service and trusted network profile.</span>
+</div>

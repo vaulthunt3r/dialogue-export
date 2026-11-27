@@ -1,0 +1,16 @@
+<box border radius="lg" padding={3} gap={3}>
+  {#each [{p:15,m:12500},{p:30,m:25000},{p:75,m:62500},{p:100,m:83333}] as item}
+    <row align="center">
+      <text weight="medium" tabularNums width="42px">{item.p}%</text>
+      <box flex={1} background="surface-tertiary" radius="sm" height={12} clip>
+        <box background={item.p===15?"#16a34a":"#8296ae"} width={`${item.p}%`} height="100%" radius="sm"/>
+      </box>
+      <text tabularNums weight="medium" width="112px" textAlign="end">{item.m.toLocaleString("ru-RU")} units</text>
+    </row>
+  {/each}
+  <caption><text color="success" inline>■</text> Measurement and estimates</caption>
+  <grid columns={2}>
+    <grid-item><caption>Change</caption><title size="2xl" color="success">+40%</title></grid-item>
+    <grid-item><caption>Total</caption><title size="xl">{83333 .toLocaleString("ru-RU")}</title></grid-item>
+  </grid>
+</box>

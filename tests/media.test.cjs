@@ -10,6 +10,52 @@ function fixture(body) {
   return dom;
 }
 
+test('status cards retain four inline vector icons and thin padded separators with either image setting', () => {
+  const d = fixture(fs.readFileSync(path.join(__dirname, 'fixtures/status-card.html'), 'utf8') + `<img src="${pixel}" alt="Following attachment">`);
+  try {
+    const before = d.window.document.body.innerHTML;
+    for (const outputFormat of ['html', 'pdf']) for (const includeAssistantImages of [true, false]) {
+      const data = d.window.ChatArchiveExtractor.collect({ outputFormat, includeAssistantImages });
+      const output = new JSDOM(d.window.ChatArchiveRenderers.html(data));
+      try {
+        const doc = output.window.document, icons = [...doc.querySelectorAll('img[data-export-icon]')];
+        assert.equal(icons.length, 4);
+        assert.deepEqual(icons.map(i => i.style.width), ['18px', '18px', '18px', '18px']);
+        assert.ok(icons.every(i => i.style.height === '18px' && i.style.flexShrink === '0' && !i.closest('figure')));
+        const vectors = icons.map(i => decodeURIComponent(i.src.split(',')[1]));
+        assert.match(vectors[0], /0, 122, 51/); assert.match(vectors[2], /180, 65, 0/);
+        assert.match(vectors[0], /circle/); assert.match(vectors[2], /M12 3 22 21H2Z/);
+        for (const divider of doc.querySelectorAll('[data-d-component="divider"]')) {
+          assert.equal(divider.style.height, '1px');
+          assert.equal(divider.style.padding, '8px 0px');
+          assert.equal(divider.style.backgroundClip, 'content-box');
+          assert.equal(divider.style.boxSizing, 'content-box');
+        }
+        assert.equal(doc.querySelectorAll('figure img').length, includeAssistantImages ? 1 : 0);
+        assert.doesNotMatch(data.messages[0].text, /Diagram|data:image/);
+      } finally { output.window.close(); }
+    }
+    assert.equal(d.window.document.body.innerHTML, before);
+  } finally { d.window.close(); }
+});
+
+test('semantic icon capture sanitizes handlers and still excludes hidden icons and UI controls', () => {
+  const icon = '<svg data-d-component="icon" width="18" height="18" viewBox="0 0 24 24" onload="alert(1)"><path d="M2 2h20v20" onclick="alert(1)"/></svg>';
+  const d = fixture(`<div data-d-component="box">Status${icon}<button aria-label="Copy">${icon}</button><span style="display:none">${icon}</span></div><svg width="18" height="18"><path d="M0 0"/></svg><img src="${pixel}" alt="After icons">`);
+  try {
+    const data = d.window.ChatArchiveExtractor.collect({ outputFormat: 'html' });
+    const output = new JSDOM(data.messages[0].html);
+    try {
+      assert.equal(output.window.document.querySelectorAll('[data-export-icon]').length, 1);
+      assert.equal(output.window.document.querySelector('figure img').alt, 'After icons');
+      assert.doesNotMatch(decodeURIComponent(output.window.document.images[0].src), /onload|onclick|alert/);
+      assert.equal(output.window.document.querySelector('button,svg'), null);
+    } finally { output.window.close(); }
+    d.window.document.querySelector('svg').insertAdjacentHTML('beforeend', '<use href="https://example.invalid/icon.svg#x"/>');
+    assert.throws(() => d.window.ChatArchiveExtractor.collect({ outputFormat: 'html' }), /unsupported visual/);
+  } finally { d.window.close(); }
+});
+
 test('HTML/PDF thumbnail cards preserve portable layout, badge styling and passive entity labels', () => {
   const html = fs.readFileSync(path.join(__dirname, 'fixtures/rich-cards.html'), 'utf8');
   const d = new JSDOM(html, { url: 'https://chatgpt.com/c/test', runScripts: 'outside-only' });

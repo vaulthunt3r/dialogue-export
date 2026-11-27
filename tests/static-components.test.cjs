@@ -6,6 +6,9 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const ID = '12345678-1234-1234-1234-123456789abc', URL = `https://chatgpt.com/c/${ID}`;
 const card = read('tests/fixtures/static-card.txt');
 const diagram = read('tests/fixtures/static-diagram.txt');
+const metrics = read('tests/fixtures/formatted-metrics.txt');
+const dilImages = require('./fixtures/dil-images.cjs');
+const promptCard = read('tests/fixtures/static-prompt.txt');
 function raw(source, metadata = {}) { return { conversation_id: ID, title: 'Static card', current_node: 'answer', mapping: {
   root: { id: 'root', parent: null, message: null }, answer: { id: 'answer', parent: 'root', message: { id: 'answer', author: { role: 'assistant' }, status: 'finished_successfully', content: { content_type: 'text', parts: [source] }, metadata } }
 } }; }
@@ -16,6 +19,155 @@ function fixture() {
   return { w, close: () => w.close(), normalize: (source, options = {}, metadata) => w.ChatArchiveApi.normalize(raw(source, metadata), URL, { outputFormat: 'html', ...options }) };
 }
 function inspect(html, check) { const d = new JSDOM(html); try { check(d.window.document); } finally { d.window.close(); } }
+
+test('direct status cards retain semantic icons without remote image metadata or enabled image downloads', () => {
+  const f = fixture(); try {
+    for (const outputFormat of ['html', 'pdf', 'json']) {
+      const data = f.normalize(read('tests/fixtures/static-status-card.txt'), { outputFormat, includeAssistantImages: false });
+      inspect(data.messages[0].html, doc => {
+        assert.equal(doc.querySelectorAll('[data-export-icon]').length, 4);
+        const vectors = [...doc.images].map(i => decodeURIComponent(i.src.split(',')[1]));
+        assert.match(vectors[0], /circle.*m8 12 3 3 5-6/);
+        assert.match(vectors[2], /stroke="#92400e"/);
+        assert.ok([...doc.images].every(i => i.style.fontSize === '18px' && i.style.width === '1em'));
+        assert.equal(doc.querySelectorAll('hr').length, 2);
+      });
+    }
+    assert.throws(() => f.normalize('<box><icon name="PRIVATE_UNRECOGNIZED"/>Status</box>'), error => {
+      assert.equal(error.sourceDiagnostic.code, 'ICON_NAME_UNSUPPORTED');
+      assert.doesNotMatch(JSON.stringify(error.sourceDiagnostic), /PRIVATE_UNRECOGNIZED/);
+      return true;
+    });
+  } finally { f.close(); }
+});
+
+test('saved body const prompt renders its exact text and whitespace without running its copy handler', () => {
+  const f = fixture(); try {
+    for (const outputFormat of ['html', 'pdf', 'json']) {
+      const data = f.normalize('Before\n\n' + promptCard + '\n\nAfter', { outputFormat });
+      inspect(data.messages[0].html, doc => {
+        const prompt = [...doc.querySelectorAll('[data-d-component="text"]')].find(n => n.style.whiteSpace === 'pre-wrap');
+        assert.ok(prompt);
+        assert.equal(prompt.textContent, 'First paragraph.\n\nSecond paragraph with two  spaces.\n  Indented line.\n\nLiteral <script>text</script> and **asterisks**.');
+        assert.match(doc.body.textContent, /Before[\s\S]*Copy prompt[\s\S]*After/);
+        assert.equal(doc.querySelector('script,button,[onclick]'), null);
+        assert.doesNotMatch(doc.body.textContent, /\{@body|GenUI\.copy|\{prompt\}/);
+      });
+    }
+  } finally { f.close(); }
+});
+
+test('body const bindings are sequential, scoped to their layout and isolated between loop iterations', () => {
+  const f = fixture(); try {
+    const source = '<box>{@body const value = "outer";}<text>{value}</text><box>{@body const value = "inner"}<text>{value}</text></box><text>{value}</text>{#each [1,2] as n}<box>{@body const doubled = n * 2}<text>{doubled}</text></box>{/each}</box>';
+    inspect(f.normalize(source).messages[0].html, doc => assert.deepEqual([...doc.querySelectorAll('[data-d-component="text"]')].map(n => n.textContent), ['outer', 'inner', 'outer', '2', '4']));
+    for (const source of [
+      '<box>{@body const value = "inner"}</box>\n\n<box><text>{value}</text></box>',
+      '<box><box>{@body const value = "inner"}</box><text>{value}</text></box>',
+      '<box><text>{value}</text>{@body const value = "later"}</box>',
+      '<box>{@body const value = 1}{@body const value = 2}</box>'
+    ]) assert.throws(() => f.normalize(source), /unsupported/);
+  } finally { f.close(); }
+});
+
+test('body statements cannot execute JavaScript, mutate state, access globals or change literal examples', () => {
+  const f = fixture(); try {
+    for (const statement of [
+      'const value = alert(1)', 'const value = globalThis.document', 'const value = (()=>1)()',
+      'let value = 1', 'const value = 1; globalThis.EXECUTED = true', 'const {value} = {value:1}',
+      'const constructor = 1', 'const value = 1, other = 2', 'value = 1', 'const value = value'
+    ]) {
+      assert.throws(() => f.normalize(`<box>{@body ${statement}}<text>{value}</text></box>`), /unsupported/);
+      assert.equal(f.w.EXECUTED, undefined);
+    }
+    const literal = '{@body const value = "literal"}';
+    inspect(f.normalize('<box>```text\n' + literal + '\n```</box>').messages[0].html, doc => assert.equal(doc.querySelector('code').textContent, literal + '\n'));
+    assert.throws(() => f.normalize('<text preserveWhitespace="yes">Text</text>'), /unsupported/);
+  } finally { f.close(); }
+});
+
+test('unsupported component diagnostics identify nested failure stages without source values', () => {
+  const f = fixture(); try {
+    const cases = [
+      ['<card><Cite refs={[{id:"PRIVATE_ID"}]} PRIVATE_ATTRIBUTE="PRIVATE_VALUE"/></card>', 'Cite', 'reference', 'CITATION_REFS_INVALID'],
+      ['<card><Cite refs={PRIVATE_FUNCTION()}/></card>', 'Cite', 'parse'],
+      ['<card><Cite refs={PRIVATE_NAME}/></card>', 'Cite', 'attribute'],
+      ['<card><box background="PRIVATE_COLOR">PRIVATE_TEXT</box></card>', 'box', 'style'],
+      ['<card><AsyncImage query="PRIVATE_QUERY"/></card>', 'AsyncImage', 'reference', 'IMAGE_REFERENCE_NOT_FOUND'],
+      ['<card><AsyncImage/></card>', 'AsyncImage', 'reference', 'IMAGE_QUERY_MISSING'],
+      ['<card><Entity value={123}/></card>', 'Entity', 'reference', 'ENTITY_VALUE_INVALID'],
+      ['<svg><use href="https://private.invalid/PRIVATE.svg"/></svg>', 'svg', 'svg']
+    ];
+    for (const outputFormat of ['html', 'pdf']) for (const [source, component, phase, code] of cases) {
+      assert.throws(() => f.normalize(source, { outputFormat }), error => {
+        const report = JSON.parse(JSON.stringify(error.sourceDiagnostic));
+        assert.equal(error.renderedLayout, true);
+        assert.equal(report.reason, 'unsupported-static-component');
+        assert.equal(report.component, component); assert.equal(report.phase, phase);
+        assert.equal(report.code, code); assert.equal(report.format, outputFormat);
+        assert.doesNotMatch(JSON.stringify(report), /PRIVATE|private|https:|FUNCTION|NAME/);
+        if (code === 'CITATION_REFS_INVALID') {
+          assert.equal(report.unknownAttributes, 1);
+          assert.deepEqual(report.attributes, [{ name: 'refs', type: 'array', length: 1, itemTypes: ['object'], truncated: false }]);
+        }
+        if (['parse', 'attribute'].includes(phase)) assert.equal(report.attribute, 'refs');
+        return true;
+      });
+    }
+    // Array diagnostics are bounded even for a rejected large reference list.
+    assert.throws(() => f.normalize('<Cite refs={' + JSON.stringify(Array(100).fill('PRIVATE_ID')) + '}/>'), error => {
+      const attr = error.sourceDiagnostic.attributes[0];
+      assert.equal(attr.length, 100); assert.equal(attr.truncated, true); assert.deepEqual(Array.from(attr.itemTypes), ['string']);
+      assert.doesNotMatch(JSON.stringify(error.sourceDiagnostic), /PRIVATE/); return true;
+    });
+  } finally { f.close(); }
+});
+
+test('unresolved AsyncImage reports reference shapes and query matches without private values', () => {
+  const f = fixture(); try {
+    const metadata = {
+      PRIVATE_METADATA_KEY: 'PRIVATE_METADATA_VALUE',
+      image_results: [{ query: 'PRIVATE_QUERY', image_url: 'https://private.invalid/PRIVATE_IMAGE' }],
+      content_references: [{ type: 'image_group', images: [{ image_search_query: ' PRIVATE_QUERY ',
+        image_result: { title: 'PRIVATE_TITLE', thumbnail_url: 'https://private.invalid/PRIVATE_PREVIEW' } }],
+        PRIVATE_REF_KEY: 'PRIVATE_REF_VALUE' }]
+    };
+    assert.throws(() => f.normalize('<AsyncImage query="PRIVATE_QUERY" aspectRatio="5:3"/>', {}, metadata), error => {
+      const report = JSON.parse(JSON.stringify(error.sourceDiagnostic));
+      assert.equal(report.code, 'IMAGE_REFERENCE_NOT_FOUND');
+      const diagnostic = report.imageReferences;
+      assert.equal(diagnostic.references.length, 1);
+      const ref = diagnostic.references.items[0];
+      assert.equal(ref.fields.type.category, 'image_group');
+      assert.equal(ref.otherFields, 1);
+      const image = ref.fields.images.items[0];
+      assert.equal(image.fields.image_search_query.matchesQuery, false);
+      assert.equal(image.fields.image_search_query.matchesTrimmedQuery, true);
+      assert.equal(image.fields.image_result.fields.thumbnail_url.referenceKind, 'http');
+      assert.equal(diagnostic.metadata.fields.image_results.items[0].fields.query.matchesQuery, true);
+      assert.equal(diagnostic.truncated, false);
+      assert.doesNotMatch(JSON.stringify(report), /PRIVATE|private|https:|5:3/);
+      return true;
+    });
+  } finally { f.close(); }
+});
+
+test('image reference diagnostic is bounded for large and deeply nested metadata', () => {
+  const f = fixture(); try {
+    let nested = { query: 'PRIVATE_QUERY', url: 'https://private.invalid/PRIVATE' };
+    for (let i = 0; i < 30; i++) nested = { images: [nested, nested, nested, nested] };
+    const refs = Array.from({ length: 2000 }, () => ({ type: 'PRIVATE_TYPE', images: [], results: nested }));
+    assert.throws(() => f.normalize('<AsyncImage query="PRIVATE_QUERY"/>', {}, { content_references: refs }), error => {
+      const diagnostic = error.sourceDiagnostic.imageReferences;
+      assert.equal(diagnostic.references.length, 2000);
+      assert.equal(diagnostic.references.items.length, 4);
+      assert.equal(diagnostic.truncated, true);
+      assert.ok(JSON.stringify(diagnostic).length < 20000);
+      assert.doesNotMatch(JSON.stringify(diagnostic), /PRIVATE|private|https:/);
+      return true;
+    });
+  } finally { f.close(); }
+});
 
 test('unmounted SVG cards preserve the observed geometry and embed through the image pipeline', async () => {
   const f = fixture(); try {
@@ -186,6 +338,109 @@ test('Cite and Entity use exact source references and escape labels; missing cit
   } finally { f.close(); }
 });
 
+test('observed singular Cite ref resolves exactly like refs without requiring rendered content', () => {
+  const f = fixture(); try {
+    const metadata = { content_references: [{ type: 'grouped_webpages', items: [
+      { title: 'Documentation', url: 'https://example.com/docs', refs: [{ turn_index: 7, ref_type: 'search', ref_index: 0 }] },
+      { title: 'Unrelated', url: 'https://example.com/unrelated', refs: ['turn7search1'] }
+    ] }] };
+    for (const outputFormat of ['html', 'pdf', 'json']) for (const attribute of ['ref="turn7search0"', 'ref={"turn7search0"}', 'refs="turn7search0"', 'refs={["turn7search0"]}']) {
+      const source = `Before\n\n- **Install** the file. <Cite ${attribute}/>\n\nAfter`;
+      const data = f.normalize(source, { outputFormat }, metadata);
+      assert.equal(data.collectionMethod, 'chatgpt-api'); assert.equal(data.unavailableCitations, 0);
+      inspect(data.messages[0].html, doc => {
+        assert.equal(doc.querySelectorAll('a').length, 1); assert.equal(doc.querySelector('a').href, 'https://example.com/docs');
+        assert.equal(doc.querySelector('li a').textContent, 'Documentation'); assert.match(doc.body.textContent, /Before[\s\S]*Install[\s\S]*After/);
+        assert.doesNotMatch(doc.body.textContent, /Unrelated|<Cite|turn7/);
+      });
+      const missing = f.normalize(source, { outputFormat });
+      assert.equal(missing.unavailableCitations, 1); assert.match(missing.messages[0].html, /Source link unavailable/);
+      const off = f.normalize(source, { outputFormat, includeLinks: false }, metadata);
+      assert.doesNotMatch(off.messages[0].html, /<a |Source link unavailable|Cite|turn7/); assert.match(off.messages[0].html, /After/);
+    }
+    for (const source of ['<Cite ref={42}/>', '<Cite ref={{id:"turn7search0"}}/>', '<Cite refs={null} ref="turn7search0"/>']) {
+      assert.throws(() => f.normalize(source), error => error.sourceDiagnostic?.code === 'CITATION_REFS_INVALID');
+    }
+    for (const source of ['`<Cite ref="turn7search0"/>`', '```xml\n<Cite ref="turn7search0"/>\n```']) {
+      inspect(f.normalize(source).messages[0].html, doc => { assert.match(doc.querySelector('code').textContent, /<Cite ref=/); assert.equal(doc.querySelector('a'), null); });
+    }
+  } finally { f.close(); }
+});
+
+test('formatted metric layouts preserve numeric labels, bars, grid items and titles without mounted messages', () => {
+  const f = fixture(); try {
+    for (const outputFormat of ['html', 'pdf', 'json']) {
+      const data = f.normalize('Before\n\n' + metrics + '\n\nAfter', { outputFormat });
+      assert.equal(data.collectionMethod, 'chatgpt-api');
+      inspect(data.messages[0].html, doc => {
+        const labels = [...doc.querySelectorAll('[data-d-component="text"]')].filter(el => el.style.width === '112px');
+        assert.deepEqual(labels.map(el => el.textContent.replace(/\u00a0/g, ' ')), ['12 500 units', '25 000 units', '62 500 units', '83 333 units']);
+        assert.ok(labels.every(el => el.style.fontVariantNumeric === 'tabular-nums'));
+        const bars = [...doc.querySelectorAll('[data-d-component="box"]')].filter(el => el.style.height === '100%');
+        assert.deepEqual(bars.map(el => el.style.width), ['15%', '30%', '75%', '100%']);
+        assert.equal(bars[0].style.backgroundColor, 'rgb(22, 163, 74)');
+        assert.equal(doc.querySelector('[data-d-component="grid"]').style.gridTemplateColumns, 'repeat(2,minmax(0,1fr))');
+        assert.equal(doc.querySelectorAll('[data-d-component="grid-item"]').length, 2);
+        assert.deepEqual([...doc.querySelectorAll('[data-d-component="title"]')].map(el => el.style.fontSize), ['24px', '20px']);
+        assert.equal(doc.querySelector('[data-d-component="box"]').style.borderWidth, '1px');
+        assert.match(doc.body.textContent, /Before[\s\S]*After/); assert.doesNotMatch(doc.body.textContent, /toLocaleString|\{#each|<grid-item|<title/);
+        assert.equal(doc.querySelector('title,script,button,[onclick]'), null);
+      });
+    }
+  } finally { f.close(); }
+});
+
+test('numeric formatting supports explicit locales and passive options in expressions and SVG labels', () => {
+  const f = fixture(); try {
+    const samples = [
+      ['(12345.67).toLocaleString("ru-RU")', '12 345,67'],
+      ['(12345.67).toLocaleString("en-US")', '12,345.67'],
+      ['(12345.67).toLocaleString("de-DE")', '12.345,67'],
+      ['(12345.6).toLocaleString(["ru-RU","en-US"],{useGrouping:false,minimumFractionDigits:2,maximumFractionDigits:2})', '12345,60'],
+      ['(0.125).toLocaleString("en-US",{style:"percent",maximumFractionDigits:1})', '12.5%'],
+      ['(-45).toLocaleString("en-US",{style:"currency",currency:"USD"})', '-$45.00'],
+      ['(15).toLocaleString("en-US",{style:"unit",unit:"meter"})', '15 m']
+    ];
+    for (const [expression, expected] of samples) {
+      inspect(f.normalize('<text>{' + expression + '}</text>').messages[0].html, doc => assert.equal(doc.body.textContent.replace(/[\u00a0\u202f]/g, ' ').trim(), expected));
+    }
+    const svg = f.normalize('<svg viewBox="0 0 150 40"><title>Metric</title><text x="5" y="20">{(12500).toLocaleString("ru-RU")}</text></svg>').messages[0].media[0].source.url;
+    assert.match(Buffer.from(svg.split(',')[1], 'base64').toString('utf8'), /12\u00a0500/);
+  } finally { f.close(); }
+});
+
+test('numeric formatting cannot call arbitrary methods or coerce objects, and has finite format bounds', () => {
+  const f = fixture(); try {
+    f.w.PWNED = false;
+    const expressions = [
+      '(1).toString()', '(1).toFixed(2)', '(1).toLocaleString.call(null)', 'globalThis.PWNED=true',
+      '({toLocaleString:123}).toLocaleString("en-US")', '[1,2].toLocaleString("en-US")', '"123".toLocaleString("en-US")',
+      '(1).toLocaleString("ru_RU")', '(1).toLocaleString("https://private.invalid")', '(1).toLocaleString({})',
+      '(1).toLocaleString("en-US",{maximumFractionDigits:1001})', '(1).toLocaleString("en-US",{unknownOption:"PRIVATE"})',
+      '(1).toLocaleString("en-US",{useGrouping:{value:true}})', '(1).toLocaleString("en-US",{},3)',
+      '(1).toLocaleString("en-US").toLocaleString("en-US")', '(1).constructor', '(1)["__proto__"]'
+    ];
+    for (const source of expressions) assert.throws(() => f.normalize('<text>{' + source + '}</text>'), /unsupported/);
+    const values = JSON.stringify(Array.from({ length: 33 }, (_, i) => i));
+    assert.throws(() => f.normalize(`<box>{#each ${values} as n}<text>{n.toLocaleString("en-US",{minimumIntegerDigits:n%21+1,useGrouping:n<21})}</text>{/each}</box>`), error => error.sourceDiagnostic?.code === 'NUMBER_FORMAT_UNSUPPORTED');
+    assert.equal(f.w.PWNED, false);
+    assert.doesNotThrow(() => f.normalize('<text>{(123).toLocaleString("en-US")}</text>'));
+  } finally { f.close(); }
+});
+
+test('grid-item and title source stays literal in code and user messages and rejects unsupported sizing', () => {
+  const f = fixture(); try {
+    for (const source of ['`<grid-item><title>Example</title></grid-item>`', '```jsx\n' + metrics + '\n```']) {
+      inspect(f.normalize(source).messages[0].html, doc => { assert.match(doc.querySelector('code').textContent, /<grid-item/); assert.equal(doc.querySelector('[data-d-component]'), null); });
+    }
+    const user = raw(metrics); user.mapping.answer.message.author.role = 'user';
+    const data = f.w.ChatArchiveApi.normalize(user, URL, { outputFormat: 'html' });
+    assert.match(data.messages[0].html, /&lt;grid-item/);
+    assert.throws(() => f.normalize('<title size="url(https://example.com)">Label</title>'), /unsupported/);
+    assert.throws(() => f.normalize('<grid><grid-item-extra>Unknown</grid-item-extra></grid>'), /unsupported/);
+  } finally { f.close(); }
+});
+
 test('AsyncImage accepts an exact saved image reference, never a guessed similar query', () => {
   const f = fixture(); try {
     const metadata = { content_references: [{ type: 'image_v2', query: 'Example screenshot', images: [{ content_url: 'https://images.example.com/exact.png' }] }] };
@@ -195,6 +450,53 @@ test('AsyncImage accepts an exact saved image reference, never a guessed similar
     assert.throws(() => f.normalize(source), /unsupported/);
     assert.throws(() => f.normalize(source.replace('Example screenshot', 'Example screenshots'), {}, metadata), /unsupported/);
     assert.doesNotThrow(() => f.normalize(source, { includeAssistantImages: false }));
+  } finally { f.close(); }
+});
+
+test('AsyncImage binds DIL results by exact query and resolution ID, independently of result order', () => {
+  const f = fixture(); try {
+    const { source, metadata, bundle, urls } = dilImages();
+    for (const outputFormat of ['html', 'pdf']) for (const saved of [metadata, { model_dil_v2: bundle }]) {
+      const result = f.normalize(source, { outputFormat }, saved);
+      assert.deepEqual(Array.from(result.messages[0].media, image => image.source.url), urls);
+      assert.match(result.messages[0].html, /Before illustrations[\s\S]*After illustrations/);
+    }
+    assert.equal(f.normalize(source, { includeAssistantImages: false }, metadata).messages[0].media, undefined);
+    assert.throws(() => f.normalize(source, {}, { safe_urls: metadata.safe_urls }), /unsupported/);
+    assert.throws(() => f.normalize(source.replace('MS Paint illustration', 'Similar illustration'), {}, metadata), /unsupported/);
+  } finally { f.close(); }
+});
+
+test('DIL image binding rejects missing, ambiguous, loading and non-image results without executing code', () => {
+  const f = fixture(); try {
+    const invalid = [
+      b => { delete b.appData.opGenui.componentResults['image-0']; },
+      b => { b.appData.opGenui.componentResults['image-0'].componentName = 'AsyncImageGroup'; },
+      b => { b.appData.opGenui.componentResults['image-0'].state.is_loading = true; },
+      b => { b.appData.opGenui.componentResults['image-0'].state.images = [{ url: 'https://example.com/page' }]; },
+      b => { b.appData.opGenui.componentResults['image-0'].state.images[0].content_url = 'javascript:alert(1)'; delete b.appData.opGenui.componentResults['image-0'].state.images[0].original_content_url; },
+      b => { b.code = b.code.replace('__dilConstants["0"]', '(globalThis.PRIVATE_EXECUTED = true)'); },
+      b => { b.code = b.code.replace('"query":__dilConstants["0"]', '...unknown,"query":__dilConstants["0"]'); },
+      b => { b.code = b.code.replace('"query":__dilConstants["0"]', '"query":"Wrong","query":__dilConstants["0"]'); },
+      b => { b.code += '__dil.jsx(AsyncImage,{"query":__dilConstants["0"],"__resolutionId":"image-1"});'; },
+      b => { b.code += '__dil.jsx(AsyncImage,{"query":__dilConstants["0"],"__resolutionId":"missing-image"});'; },
+      b => { b.appData.opGenui.componentResults['image-0'].state.images.push({ content_url: 'https://example.com/second.jpg' }); },
+      b => { b.code = JSON.stringify(b.code); },
+      b => { b.code = '/*' + b.code + '*/'; },
+      b => { b.code = '`' + b.code + '`'; },
+      b => { b.code = '/' + b.code + '/'; },
+      b => { b.code = ' '.repeat(2 * 1024 * 1024) + b.code; }
+    ];
+    for (const change of invalid) {
+      const { source, metadata, bundle } = dilImages(); change(bundle);
+      assert.throws(() => f.normalize(source, {}, metadata), /unsupported/);
+      assert.equal(f.w.PRIVATE_EXECUTED, undefined);
+    }
+    const { source, metadata, bundle, urls } = dilImages();
+    bundle.code = 'globalThis.PRIVATE_EXECUTED = true; /* discarded fake call */\n' + bundle.code;
+    bundle.constants['1'] = '["image-0"]';
+    assert.deepEqual(Array.from(f.normalize(source, {}, metadata).messages[0].media, image => image.source.url), urls);
+    assert.equal(f.w.PRIVATE_EXECUTED, undefined);
   } finally { f.close(); }
 });
 

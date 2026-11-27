@@ -239,7 +239,7 @@
       // Component names identify the rendered UI even without attributes, or
       // when a different attribute comes first. Cite is case-sensitive here:
       // lowercase <cite> is ordinary HTML that the Markdown renderer escapes.
-      if (/<(?:AsyncImage|Entity|card|box|row|column|grid|badge|text|caption|divider|spacer|svg)(?=[\s/>])/i.test(prose) || /<Cite(?=[\s/>])/.test(prose)) {
+      if (/<(?:AsyncImage|Entity|card|box|row|column|grid|grid-item|title|badge|text|caption|divider|spacer|svg)(?=[\s/>])/i.test(prose) || /<Cite(?=[\s/>])/.test(prose)) {
         hasLayout = true;
         if (!window.ChatArchiveComponents) fallback('This rich content needs collection from the page.', null, true);
       }
@@ -397,7 +397,7 @@
           if (!window.ChatArchiveMarkdown) throw new Error('The HTML renderer is unavailable. Reload the conversation tab.');
           rendered = window.ChatArchiveMarkdown.render(value, { assets, includeLinks: options.includeLinks !== false,
             includeImages: !jsonExport && (role === 'user' ? options.includeUserImages : options.includeAssistantImages) !== false,
-            allowComponents: role === 'assistant', references: meta.content_references || [] });
+            allowComponents: role === 'assistant', references: meta.content_references || [], metadata: meta });
         }
       }
       catch (error) {
@@ -405,7 +405,9 @@
           pageMessage = renderedMessage(message.id);
         }
         if (!pageMessage?.html?.trim()) {
-          if (error.componentUnsupported) fallback(error.message, null, true);
+          if (error.componentUnsupported) fallback(error.message, error.componentDiagnostic ? {
+            ...error.componentDiagnostic, format: options.outputFormat
+          } : null, true);
           throw error;
         }
       }
@@ -431,10 +433,16 @@
       }
       records.push({ item, generated, turn, pathIndex, fromPage: !!pageMessage });
     }
-    if (records.some(record => record.fromPage) && records.some(record => record.generated)) {
-      // Tool images can repeat media inside a rendered answer. Without the
-      // page's image-to-tool mapping, a hybrid could silently duplicate them.
-      fallback('Rendered cards with generated-image messages need collection from the page.');
+    const renderedTurns = new Set(records.filter(record => record.fromPage).map(record => record.turn));
+    if (records.some(record => record.generated && renderedTurns.has(record.turn))) {
+      // Tool images can repeat media inside a rendered answer in the SAME
+      // user turn. Images from other turns have separate, explicit API records
+      // and do not prevent using an exactly identified page answer here.
+      fallback('Rendered cards with generated-image messages need collection from the page.', {
+        version: 1, reason: 'rendered-generated-image-mix',
+        renderedAnswers: records.filter(record => record.fromPage).length,
+        generatedImageMessages: records.filter(record => record.generated).length
+      });
     }
     const generatedImages = new Map();
     const positions = new Map();
@@ -519,6 +527,10 @@
               needed.push(messageId); return { html: '<span></span>' };
             });
             pageMessages = plan.messages.map(({ id, role }) => ({ id, role }));
+            if (error.sourceDiagnostic?.reason === 'unsupported-static-component') {
+              const position = pageMessages.findIndex(message => message.id === needed[0]);
+              if (position >= 0) error.sourceDiagnostic.messagePosition = position + 1;
+            }
             if (readRendered) {
               clearTimeout(timeout); // Page media loading has its own deadline.
               let matchFailure = null;
@@ -533,7 +545,7 @@
                   expectedMessages: pageMessages.length, requiredRenderedMessages: needed.length };
                 error.sourceDiagnostic = error.sourceDiagnostic ? { ...error.sourceDiagnostic, renderedMatch: diagnostic } : diagnostic;
                 const explanations = {
-                  RENDERED_MESSAGE_NOT_LOADED: 'A required card or diagram is not loaded on the page. Open that answer in the chat, then retry.',
+                  RENDERED_MESSAGE_NOT_LOADED: `Message ${diagnostic.missingMessagePositions?.[0] || '?'} contains content that could not be reconstructed from saved data and is not loaded on the page. Open that answer in the chat, then retry.`,
                   RENDERED_ID_AMBIGUOUS: 'A loaded answer has conflicting message identifiers. Its card or diagram could not be safely matched.',
                   RENDERED_BRANCH_MISMATCH: 'The loaded answers changed during export. Retry after the chat finishes loading.',
                   RENDERED_ORDER_MISMATCH: 'Loaded answers are duplicated or out of order. Reload the chat, then retry.',
@@ -545,6 +557,7 @@
             }
           } catch (reason) {
             if (!(reason instanceof PageFallback)) throw reason;
+            if (error.sourceDiagnostic && reason.sourceDiagnostic) error.sourceDiagnostic.renderedPlan = reason.sourceDiagnostic;
             pageMessages = null;
           }
         }

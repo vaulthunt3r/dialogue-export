@@ -239,6 +239,7 @@
       });
     }
     clone.querySelectorAll('img').forEach(image => {
+      if (image.hasAttribute('data-export-icon')) { image.remove(); return; }
       const label = (image.getAttribute('alt') || 'Image').replace(/[\[\]\\\r\n]/g, ' ');
       const src = image.getAttribute('src') || '';
       const value = markdown && src ? `![${label}](<${src.replace(/</g, '%3C').replace(/>/g, '%3E')}>)`
@@ -303,6 +304,16 @@
           (element.style.height || element.hasAttribute('data-d-has-height'))) {
         const pixels = parseFloat(computed.height);
         if (/px$/.test(computed.height) && pixels > 0 && pixels <= 600) target.style.height = computed.height;
+      }
+      // DIL separators paint only their 1px content box; their padding is
+      // whitespace. Copying the background alone turns that padding into a bar.
+      if (element.getAttribute('data-d-component') === 'divider' && !element.children.length && !element.textContent.trim()) {
+        const pixels = parseFloat(computed.height);
+        if (/px$/.test(computed.height) && pixels > 0 && pixels <= 16) {
+          target.style.height = computed.height;
+          target.style.boxSizing = computed.boxSizing === 'content-box' ? 'content-box' : 'border-box';
+          if (['content-box', 'padding-box', 'border-box'].includes(computed.backgroundClip)) target.style.backgroundClip = computed.backgroundClip;
+        }
       }
       if (!components.has(element.parentElement)) {
         for (let parent = element; parent; parent = parent.parentElement) {
@@ -372,7 +383,7 @@
     const sourceElements = [...source.querySelectorAll('*')];
     const cloneElements = [...clone.querySelectorAll('*')];
     if (preserveLayout) preserveCardLayouts([source, ...sourceElements], [clone, ...cloneElements]);
-    if (includeMedia) window.ChatArchiveMedia?.preserve(source, clone, { owner: mediaOwner, excludedRoots: mediaExclusions(source) });
+    window.ChatArchiveMedia?.preserve(source, clone, { owner: mediaOwner, excludedRoots: mediaExclusions(source), includeImages: includeMedia });
     clone.querySelectorAll('[data-export-hidden]').forEach(element => element.remove());
     // ChatGPT table edge overlays have inline measured dimensions, but their
     // absolute positioning lives in a site stylesheet. Without that stylesheet
@@ -493,7 +504,7 @@
     }
     if (!includeLinks) clone.querySelectorAll('a').forEach(a => a.replaceWith(...a.childNodes));
     if (!includeMedia) {
-      clone.querySelectorAll('img, picture, svg, canvas, figure[data-export-media]').forEach(element => element.remove());
+      clone.querySelectorAll('img:not([data-export-icon]), picture, svg, canvas, figure[data-export-media]').forEach(element => element.remove());
       clone.querySelectorAll('.chat-archive-card').forEach(card => {
         [...card.children].filter(child => !child.textContent.trim()).forEach(child => child.remove());
         card.style.gridTemplateColumns = 'minmax(0, 1fr)';

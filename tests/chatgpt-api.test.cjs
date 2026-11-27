@@ -349,16 +349,19 @@ test('a mounted rich answer uses API messages outside the viewport without scrol
   }finally{f.close();}
 });
 
-test('a rich answer mixed with generated tool images does not guess their DOM grouping',async()=>{
+test('a rich answer mixed with generated tool images in the same turn does not guess their DOM grouping',async()=>{
   const f=fixture(URL,true);try{
     const raw=eightVisualMessages(f);
-    raw.mapping.generated=node('generated','m7','tool','',{
+    raw.mapping.generated=node('generated','m1','tool','',{
       content:{content_type:'multimodal_text',parts:[{content_type:'image_asset_pointer',asset_pointer:'file-service://image-1'}]}
-    });raw.current_node='generated';
+    });raw.mapping.m2.parent='generated';
     let calls=0;
     const result=await f.api.collect({outputFormat:'html'},()=>{},()=>{},undefined,async()=>{calls++;return new Map();});
     assert.equal(result.data,undefined);assert.equal(result.pageMessages,null);assert.equal(calls,0);
     assert.match(result.fallback,/unsupported layout, expression or reference/);
+    assert.equal(result.sourceDiagnostic.renderedPlan.reason, 'rendered-generated-image-mix');
+    assert.equal(result.sourceDiagnostic.renderedPlan.renderedAnswers, 1);
+    assert.equal(result.sourceDiagnostic.renderedPlan.generatedImageMessages, 1);
   }finally{f.close();}
 });
 
@@ -411,18 +414,59 @@ test('unmatched rendered answers report fixed reasons and counts without convers
       await f.clock.tickAsync(100);
       const status = (await f.w.receive({ type: 'PING' })).exportStatus;
       assert.equal(status.state, 'error');
-      const diagnostic = clone(status.sourceDiagnostic);
+      const sourceDiagnostic = clone(status.sourceDiagnostic);
+      assert.equal(sourceDiagnostic.reason, 'unsupported-static-component');
+      assert.equal(sourceDiagnostic.component, 'AsyncImage');
+      assert.equal(sourceDiagnostic.code, 'IMAGE_REFERENCE_NOT_FOUND');
+      assert.equal(sourceDiagnostic.messagePosition, 2);
+      const diagnostic = sourceDiagnostic.renderedMatch;
       assert.equal(diagnostic.reason, 'rendered-message-match-failed');
       assert.equal(diagnostic.code, { missing: 'RENDERED_MESSAGE_NOT_LOADED', ambiguous: 'RENDERED_ID_AMBIGUOUS', role: 'RENDERED_ROLE_MISMATCH', 'changed-during-images': 'RENDERED_MESSAGE_NOT_LOADED' }[failure]);
       assert.equal(diagnostic.phase, failure === 'changed-during-images' ? 'after-images' : 'before-images');
       assert.equal(diagnostic.expectedMessages, 8); assert.equal(diagnostic.requiredRenderedMessages, 1);
       if (failure === 'missing' || failure === 'changed-during-images') assert.deepEqual(diagnostic.missingMessagePositions, [2]);
       const report = f.w.document.querySelector('.chat-archive-source-diagnostic pre').textContent;
-      assert.deepEqual(JSON.parse(report), diagnostic);
+      assert.deepEqual(JSON.parse(report), sourceDiagnostic);
       assert.doesNotMatch(report, /PRIVATE|SECRET|Unmapped|https:|Message |\bm[0-7]\b/);
       assert.equal(f.sent.some(request => ['EXPORT_READY', 'EXPORT_PARTS_START'].includes(request.type)), false);
     } finally { f.close(); }
   }
+});
+
+test('loading a failed inline reference answer allows all eight messages to export without scrolling', async () => {
+  const f = fixture(URL, true);
+  try {
+    const raw = eightVisualMessages(f), main = f.w.document.querySelector('main');
+    // Synthetic unsupported syntax; the real report did not include raw markup.
+    raw.mapping.m1.message.content.parts = ['Instructions <Cite refs={42}/>'];
+    main.querySelector('[data-chatgpt-selection-message-id="m1"]').remove();
+    main.firstElementChild.remove();
+    let scrollWrites = 0;
+    main.style.overflowY = 'auto';
+    Object.defineProperties(main, { clientHeight: { value: 600 }, scrollHeight: { value: 5000 },
+      scrollTop: { get: () => 4400, set: () => { scrollWrites++; } } });
+    await f.w.receive({ type: 'BEGIN_EXPORT', job: { format: 'html', filename: 'test.html', options: {} } });
+    await f.clock.tickAsync(100);
+    const status = (await f.w.receive({ type: 'PING' })).exportStatus;
+    assert.equal(status.state, 'error'); assert.match(status.label, /Message 2/);
+    const diagnostic = clone(status.sourceDiagnostic);
+    assert.equal(diagnostic.component, 'Cite'); assert.equal(diagnostic.code, 'CITATION_REFS_INVALID');
+    assert.equal(diagnostic.messagePosition, 2);
+    assert.equal(diagnostic.renderedMatch.expectedMessages, 8); assert.equal(diagnostic.renderedMatch.mountedMessages, 6);
+    assert.deepEqual(diagnostic.renderedMatch.missingMessagePositions, [2]);
+    assert.equal(f.sent.some(request => request.type === 'EXPORT_READY'), false);
+    main.insertAdjacentHTML('afterbegin', '<div data-chatgpt-selection-message-id="m1"><p>Instructions <a href="https://example.com/docs">Documentation</a></p></div>');
+    const pending = f.w.receive({ type: 'COLLECT', options: { outputFormat: 'html', includeLinks: true } });
+    const settled = pending.then(value => ({ value }), error => ({ error }));
+    await f.clock.runAllAsync();
+    const { value, error } = await settled;
+    assert.ifError(error); assert.equal(value.collectionMethod, 'chatgpt-api-rendered');
+    assert.deepEqual(clone(value.messages.map(message => message.id)), Array.from({ length: 8 }, (_, i) => `m${i}`));
+    assert.match(value.messages[0].html, /Message 0/);
+    assert.match(value.messages[1].html, /Instructions.*https:\/\/example.com\/docs.*Documentation/);
+    assert.match(value.messages[7].html, /Message 7/);
+    assert.doesNotMatch(value.messages[1].html, /<Cite|refs=/); assert.equal(scrollWrites, 0);
+  } finally { f.close(); }
 });
 
 test('temporary chat never makes a backend request', async () => {

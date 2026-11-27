@@ -2,14 +2,34 @@
   if (globalThis.ChatArchiveComponents) return;
   // A static interpreter for the layout notation stored in conversation text.
   // It never compiles/evaluates JavaScript, calls page functions or mounts UI.
-  const names = new Set(['card', 'box', 'row', 'column', 'grid', 'text', 'caption', 'badge', 'divider', 'spacer', 'button', 'icon', 'AsyncImage', 'Entity', 'Cite', 'svg']);
+  const names = new Set(['card', 'box', 'row', 'column', 'grid', 'grid-item', 'title', 'text', 'caption', 'badge', 'divider', 'spacer', 'button', 'icon', 'AsyncImage', 'Entity', 'Cite', 'svg']);
   const svgNames = 'svg g path rect circle ellipse line polyline polygon text tspan defs linearGradient radialGradient stop clipPath mask title desc marker use'.split(' ');
   const svgName = name => svgNames.find(item => item.toLowerCase() === name.toLowerCase());
   const canonical = name => name.toLowerCase() === 'cite' ? name === 'Cite' ? 'Cite' : null : [...names].find(item => item.toLowerCase() === name.toLowerCase());
   const inline = new Set(['text', 'badge', 'button', 'icon', 'Entity', 'Cite']);
   const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
   class Unsupported extends Error {
-    constructor() { super('This card contains an unsupported layout, expression or reference. No file was saved.'); this.componentUnsupported = true; }
+    constructor(code) { super('This content contains an unsupported layout, expression or reference. No file was saved.'); this.componentUnsupported = true; this.componentCode = code; }
+  }
+  const diagnosticAttributes = new Set('refs ref id value query src url alt category aspectRatio maxWidth gap padding paddingX paddingY width minWidth height minHeight maxHeight background color radius flex align justify weight textAlign direction columns size tabularNums preserveWhitespace border style viewBox fill stroke d points'.split(' '));
+  const diagnosticCodes = new Set(['CITATION_REFS_INVALID', 'ENTITY_VALUE_INVALID', 'IMAGE_QUERY_MISSING', 'IMAGE_REFERENCE_NOT_FOUND', 'IMAGE_REFERENCE_AMBIGUOUS', 'NUMBER_FORMAT_UNSUPPORTED', 'ICON_NAME_UNSUPPORTED']);
+  const valueType = value => value === null ? 'null' : Array.isArray(value) ? 'array' : ['string', 'number', 'boolean', 'object', 'undefined'].includes(typeof value) ? typeof value : 'other';
+  // Diagnostics contain fixed categories and counts, never source fragments,
+  // attribute values, arbitrary names, reference IDs, labels or URLs.
+  function diagnose(error, component, phase, attribute, attrs) {
+    if (!(error instanceof Unsupported) || error.componentDiagnostic) return;
+    const report = { version: 1, reason: 'unsupported-static-component',
+      component: canonical(component || '') || svgName(component || '') || 'other', phase };
+    if (attribute) report.attribute = diagnosticAttributes.has(attribute) ? attribute : 'other';
+    if (diagnosticCodes.has(error.componentCode)) report.code = error.componentCode;
+    if (error.imageReferenceDiagnostic) report.imageReferences = error.imageReferenceDiagnostic;
+    if (attrs) {
+      const entries = Object.entries(attrs);
+      report.unknownAttributes = entries.filter(([key]) => !diagnosticAttributes.has(key)).length;
+      report.attributes = entries.filter(([key]) => diagnosticAttributes.has(key)).map(([name, value]) => ({ name, type: valueType(value),
+        ...(Array.isArray(value) ? { length: value.length, itemTypes: [...new Set(value.slice(0, 16).map(valueType))], truncated: value.length > 16 } : {}) }));
+    }
+    error.componentDiagnostic = report;
   }
   const fail = () => { throw new Unsupported(); };
   const own = (object, key) => object != null && !forbidden.has(String(key)) && Object.hasOwn(object, key);
@@ -100,6 +120,14 @@
       for (;;) {
         if (take('.')) { space(); match = source.slice(pos).match(/^[A-Za-z_$][\w$]*/); if (!match || forbidden.has(match[0])) fail(); pos += match[0].length; value = { type: 'member', object: value, key: { type: 'literal', value: match[0] } }; }
         else if (take('[')) { const key = binary(0); expect(']'); value = { type: 'member', object: value, key }; }
+        else if (take('(')) {
+          // This syntax denotes our own numeric formatter, never a call to a
+          // method or function supplied by the conversation.
+          if (value.type !== 'member' || value.key.type !== 'literal' || value.key.value !== 'toLocaleString') fail();
+          const args = [];
+          if (!take(')')) for (;;) { args.push(binary(0)); if (args.length > 2) fail(); if (take(')')) break; expect(','); }
+          value = { type: 'format-number', value: value.object, args };
+        }
         else break;
       }
       nesting--; return value;
@@ -116,11 +144,42 @@
     }
     const result = binary(0); space(); if (pos !== source.length) fail(); return result;
   }
+  const numberFormatOptions = new Set('localeMatcher numberingSystem style currency currencyDisplay currencySign unit unitDisplay notation compactDisplay useGrouping signDisplay minimumIntegerDigits minimumFractionDigits maximumFractionDigits minimumSignificantDigits maximumSignificantDigits trailingZeroDisplay'.split(' '));
+  function formatNumber(value, args, state) {
+    const invalid = () => { throw new Unsupported('NUMBER_FORMAT_UNSUPPORTED'); };
+    if (typeof value !== 'number' || !Number.isFinite(value)) invalid();
+    const [locales, supplied] = args;
+    if (args.length) {
+      const list = Array.isArray(locales) ? locales : [locales];
+      if (!list.length || list.length > 8 || list.some(locale => typeof locale !== 'string' || locale.length > 80 || !/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/.test(locale))) invalid();
+    }
+    const options = Object.create(null);
+    if (args.length > 1) {
+      if (!supplied || typeof supplied !== 'object' || Array.isArray(supplied)) invalid();
+      for (const [key, item] of Object.entries(supplied)) {
+        if (!numberFormatOptions.has(key) || !['string', 'number', 'boolean'].includes(typeof item) ||
+            typeof item === 'string' && item.length > 80 || typeof item === 'number' && (!Number.isFinite(item) || Math.abs(item) > 1000)) invalid();
+        options[key] = item;
+      }
+    }
+    const key = JSON.stringify([locales, options]);
+    const formats = state.numberFormats ||= new Map();
+    try {
+      if (!formats.has(key)) {
+        if (formats.size >= 32) invalid();
+        formats.set(key, new Intl.NumberFormat(locales, options));
+      }
+      const result = formats.get(key).format(value);
+      if (result.length > 1024) invalid();
+      return result;
+    } catch (_) { invalid(); }
+  }
   function evaluate(ast, scope, state, depth = 0) {
     if (depth > 64) fail();
     budget(state);
     const run = node => evaluate(node, scope, state, depth + 1);
     if (ast.type === 'literal') return ast.value;
+    if (ast.type === 'format-number') return formatNumber(run(ast.value), ast.args.map(run), state);
     if (ast.type === 'name') { if (!own(scope, ast.name)) fail(); return scope[ast.name]; }
     if (ast.type === 'array') return ast.items.map(run);
     if (ast.type === 'object') return Object.assign(Object.create(null), Object.fromEntries(ast.items.map(([key, value]) => [key, run(value)])));
@@ -141,11 +200,11 @@
     fail();
   }
 
-  function starts(source, pos = 0) { const match = source.slice(pos).match(/^<([A-Za-z][\w]*)(?=[\s/>])/); return !!match && !!canonical(match[1]); }
+  function starts(source, pos = 0) { const match = source.slice(pos).match(/^<([A-Za-z][\w-]*)(?=[\s/>])/); return !!match && !!canonical(match[1]); }
   function read(source, start = 0) {
-    let pos = start, count = 0;
+    let pos = start, count = 0, location = { component: 'other', attribute: null };
     function sequence(closing, depth, inSvg = false) {
-      if (depth > 48) fail(); const nodes = []; let text = '';
+      if (depth > 48) fail(); const nodes = [], bindings = new Set(); let text = '';
       const flush = () => { if (text) { nodes.push({ type: 'text', value: text }); text = ''; } };
       while (pos < source.length) {
         if (++count > 200000) fail();
@@ -156,6 +215,16 @@
           if (end >= 0) { text += source.slice(pos, end + mark.length); pos = end + mark.length; continue; }
         }
         if (source[pos] === '\\' && pos + 1 < source.length) { text += source.slice(pos, pos + 2); pos += 2; continue; }
+        if (source.startsWith('{@body', pos)) {
+          // Only a local immutable data binding, not a JavaScript body. The
+          // existing expression parser excludes calls, assignments and globals.
+          flush(); const end = balancedEnd(source, pos);
+          const declaration = source.slice(pos + 6, end - 1).match(/^\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*([\s\S]+?)\s*;?\s*$/);
+          if (inSvg || !declaration || forbidden.has(declaration[1]) || bindings.has(declaration[1]) || bindings.size >= 128) fail();
+          bindings.add(declaration[1]);
+          nodes.push({ type: 'constant', name: declaration[1], value: expression(declaration[2]) });
+          pos = end; continue;
+        }
         if (source.startsWith('{#each ', pos)) {
           flush(); const end = balancedEnd(source, pos), header = source.slice(pos + 7, end - 1).match(/^([\s\S]+)\s+as\s+([A-Za-z_$][\w$]*)(?:\s*,\s*([A-Za-z_$][\w$]*))?\s*$/);
           if (!header || forbidden.has(header[2]) || forbidden.has(header[3])) fail(); pos = end;
@@ -174,14 +243,18 @@
       if (closing) fail(); flush(); return nodes;
     }
     function component(depth, inSvg = false) {
-      if (depth > 48) fail(); const match = source.slice(pos).match(/^<([A-Za-z][\w]*)/);
-      const name = match && (inSvg ? svgName(match[1]) : canonical(match[1])); if (!name) fail();
+      if (depth > 48) fail(); const match = source.slice(pos).match(/^<([A-Za-z][\w-]*)/);
+      const name = match && (inSvg ? svgName(match[1]) : canonical(match[1]));
+      const parent = location; location = { component: name || 'other', attribute: null };
+      if (!name) fail();
+      const done = node => { location = parent; return node; };
       const sourceName = match[1], attrs = Object.create(null); pos += match[0].length;
       for (;;) {
         while (/\s/.test(source[pos] || '') && pos < source.length) pos++;
-        if (source.startsWith('/>', pos)) { pos += 2; return { type: 'component', name, attrs, children: [] }; }
+        if (source.startsWith('/>', pos)) { pos += 2; return done({ type: 'component', name, attrs, children: [] }); }
         if (source[pos] === '>') { pos++; break; }
         const attr = source.slice(pos).match(/^([A-Za-z_][\w-]*)/); if (!attr) fail(); pos += attr[0].length;
+        location.attribute = attr[1];
         while (/\s/.test(source[pos] || '') && pos < source.length) pos++;
         let value = { type: 'literal', value: true };
         if (source[pos] === '=') {
@@ -192,9 +265,11 @@
         }
         if (forbidden.has(attr[1]) || Object.hasOwn(attrs, attr[1])) fail(); if (!/^on/i.test(attr[1])) attrs[attr[1]] = value;
       }
-      return { type: 'component', name, attrs, children: sequence(`</${sourceName}>`, depth + 1, inSvg || name === 'svg') };
+      location.attribute = null;
+      return done({ type: 'component', name, attrs, children: sequence(`</${sourceName}>`, depth + 1, inSvg || name === 'svg') });
     }
-    const node = component(0); return { node, end: pos };
+    try { const node = component(0); return { node, end: pos }; }
+    catch (error) { diagnose(error, location.component, 'parse', location.attribute); throw error; }
   }
 
   // Serialize only passive SVG shapes. Expressions use the same bounded data
@@ -279,6 +354,13 @@
   }
 
   const palette = { 'surface': '#ffffff', 'surface-elevated': '#ffffff', 'surface-secondary': '#f3f4f6', 'surface-tertiary': '#e5e7eb', 'primary': '#1d2026', 'secondary': '#596273', 'tertiary': '#6b7280', 'subtle': '#d1d5db', 'success': '#166534', 'warning': '#92400e', 'danger': '#b91c1c', 'info': '#1d4ed8', 'transparent': 'transparent' };
+  // Small, inert equivalents for observed source icons. Other names must use
+  // the rendered answer's sanitized vector instead of disappearing silently.
+  const icons = {
+    'check-circle': '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+    'alert-triangle': '<path d="M10.3 3.8a2 2 0 0 1 3.4 0l8 14a2 2 0 0 1-1.7 3H4a2 2 0 0 1-1.7-3zM12 9v4m0 3v.1"/>',
+    'copy': '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>'
+  };
   function color(value) { const text = String(value); if (Object.hasOwn(palette, text)) return palette[text]; if (/^#[0-9a-f]{3,8}$/i.test(text) && [4,5,7,9].includes(text.length)) return text; if (/^(?:black|white|red|green|blue|gray|grey|orange|purple)$/i.test(text)) return text; fail(); }
   function length(value) { if (typeof value === 'number' && value >= 0 && value <= 4096) return `${value}px`; if (typeof value === 'string' && /^(?:\d+(?:\.\d+)?)(?:px|%|rem|em)$/.test(value) && parseFloat(value) <= 4096) return value; fail(); }
   function styles(name, attrs) {
@@ -289,6 +371,7 @@
     if (name === 'grid') { set('display', 'grid'); const columns = attrs.columns ?? 2; if (!Number.isInteger(columns) || columns < 1 || columns > 12) fail(); set('grid-template-columns', `repeat(${columns},minmax(0,1fr))`); set('gap', '12px'); }
     if (name === 'spacer') set('flex', '1 1 0%');
     if (name === 'caption') { set('font-size', '13px'); set('color', '#596273'); }
+    if (name === 'title') { set('display', 'block'); set('font-size', '24px'); set('font-weight', '600'); set('line-height', '1.25'); }
     if (name === 'badge') { set('display', 'inline-block'); set('padding', '2px 7px'); set('border', '1px solid currentColor'); set('border-radius', '5px'); set('font-size', '12px'); }
     if (name === 'divider') { set('border', '0'); set('border-top', `1px solid ${color(attrs.color || 'subtle')}`); set('width', '100%'); set('margin', '8px 0'); }
     for (const [key, value] of Object.entries(attrs)) {
@@ -303,27 +386,90 @@
       else if (key === 'weight') { const choices = { normal: 400, medium: 500, semibold: 600, bold: 700 }; if (!own(choices, value)) fail(); set('font-weight', choices[value]); }
       else if (key === 'textAlign') { if (!['start', 'end', 'left', 'right', 'center'].includes(value)) fail(); set('text-align', value); }
       else if (key === 'direction') { if (!['row', 'col', 'column'].includes(value)) fail(); set('flex-direction', value === 'row' ? 'row' : 'column'); }
+      else if (key === 'size') { const sizes = { xs: 12, sm: 14, base: 16, lg: 18, xl: 20, '2xl': 24, '3xl': 30, '4xl': 36 }; if (!own(sizes, value)) fail(); set('font-size', `${sizes[value]}px`); }
+      else if (key === 'tabularNums') { if (typeof value !== 'boolean') fail(); if (value) set('font-variant-numeric', 'tabular-nums'); }
+      else if (key === 'preserveWhitespace') { if (typeof value !== 'boolean') fail(); if (value) set('white-space', 'pre-wrap'); }
+      else if (key === 'border') { if (typeof value !== 'boolean') fail(); if (value) set('border', '1px solid #d1d5db'); }
     }
     return values.join(';');
   }
   function render(node, context, scope = Object.create(null), state = { steps: 50000, nodes: 0 }) {
-    budget(state); if (++state.nodes > 10000) throw new Error('This card exceeds the static rendering limit. No file was saved.');
-    const evaluateHere = value => evaluate(value, scope, state);
-    if (node.type === 'expression') return { html: escape(scalar(evaluateHere(node.value))), inline: true };
-    if (node.type === 'each') {
-      const values = evaluateHere(node.value); if (!Array.isArray(values) || values.length > 512) fail();
-      return { html: values.map((value, index) => context.sequence(node.children, Object.assign(Object.create(null), scope, { [node.name]: value }, node.index ? { [node.index]: index } : {}), state)).join(''), inline: false };
-    }
-    if (node.type === 'if') return { html: evaluateHere(node.value) ? context.sequence(node.children, scope, state) : '', inline: false };
-    if (node.name === 'svg') return { html: context.includeImages === false ? '' : context.svg(svgSource(node, scope, state)), inline: false };
-    const attrs = Object.create(null); for (const [name, value] of Object.entries(node.attrs)) attrs[name] = evaluateHere(value);
-    const name = node.name;
-    if (name === 'icon') return { html: '', inline: true };
-    if (['Cite', 'Entity', 'AsyncImage'].includes(name)) return { html: context.reference(name, attrs), inline: inline.has(name) };
-    const child = context.sequence(node.children, scope, state, inline.has(name));
-    const tag = name === 'divider' ? 'hr' : inline.has(name) ? 'span' : 'div';
-    const html = `<${tag} class="chat-archive-component export-static-component" data-d-component="${name}" style="${escape(styles(name, attrs))}">${tag === 'hr' ? '' : `${child}</${tag}>`}`;
-    return { html, inline: inline.has(name) };
+    let phase = 'expression', attribute = null;
+    const attrs = Object.create(null);
+    try {
+      budget(state); if (++state.nodes > 10000) throw new Error('This card exceeds the static rendering limit. No file was saved.');
+      const evaluateHere = value => evaluate(value, scope, state);
+      if (node.type === 'constant') {
+        // sequence() supplies a fresh local scope. A child binding can shadow
+        // a parent but cannot read its own uninitialized value or leak out.
+        delete scope[node.name];
+        scope[node.name] = evaluateHere(node.value);
+        return { html: '', inline: true };
+      }
+      if (node.type === 'expression') return { html: escape(scalar(evaluateHere(node.value))), inline: true };
+      if (node.type === 'each') {
+        const values = evaluateHere(node.value); if (!Array.isArray(values) || values.length > 512) fail();
+        return { html: values.map((value, index) => context.sequence(node.children, Object.assign(Object.create(null), scope, { [node.name]: value }, node.index ? { [node.index]: index } : {}), state)).join(''), inline: false };
+      }
+      if (node.type === 'if') return { html: evaluateHere(node.value) ? context.sequence(node.children, scope, state) : '', inline: false };
+      phase = 'svg';
+      if (node.name === 'svg') return { html: context.includeImages === false ? '' : context.svg(svgSource(node, scope, state)), inline: false };
+      phase = 'attribute';
+      for (const [name, value] of Object.entries(node.attrs)) { attribute = name; attrs[name] = evaluateHere(value); }
+      attribute = null;
+      const name = node.name;
+      if (name === 'icon') {
+        phase = 'reference';
+        if (!own(icons, attrs.name)) throw new Unsupported('ICON_NAME_UNSUPPORTED');
+        phase = 'style';
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color(attrs.color || 'primary')}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[attrs.name]}</svg>`;
+        return { html: `<img data-d-component="icon" data-export-icon="" alt="${escape(attrs.name)}" src="data:image/svg+xml;charset=utf-8,${escape(encodeURIComponent(svg))}" style="${escape(styles(name, attrs))};display:inline-block;width:1em;height:1em;flex-shrink:0;vertical-align:middle;margin:0">`, inline: true };
+      }
+      phase = 'reference';
+      if (['Cite', 'Entity', 'AsyncImage'].includes(name)) return { html: context.reference(name, attrs), inline: inline.has(name) };
+      phase = 'children';
+      const child = context.sequence(node.children, scope, state, inline.has(name));
+      const tag = name === 'divider' ? 'hr' : inline.has(name) ? 'span' : 'div';
+      phase = 'style';
+      const html = `<${tag} class="chat-archive-component export-static-component" data-d-component="${name}" style="${escape(styles(name, attrs))}">${tag === 'hr' ? '' : `${child}</${tag}>`}`;
+      return { html, inline: inline.has(name) };
+    } catch (error) { diagnose(error, node.name, phase, attribute, attrs); throw error; }
   }
-  window.ChatArchiveComponents = { starts, read, render, Unsupported, escape, inline };
+  // Read only compiler-emitted AsyncImage property records. The surrounding
+  // program is never run, and neither expressions nor functions resolve an ID.
+  function imageBindings(bundle) {
+    const code = bundle?.code, constants = bundle?.constants;
+    if (typeof code !== 'string' || code.length > 2 * 1024 * 1024) return [];
+    const bindings = [];
+    const savedString = ast => {
+      if (ast?.type === 'literal' && typeof ast.value === 'string') return ast.value;
+      if (ast?.type === 'member' && ast.object.type === 'name' && ast.object.name === '__dilConstants' &&
+          ast.key.type === 'literal' && typeof ast.key.value === 'string' && own(constants, ast.key.value) &&
+          typeof constants[ast.key.value] === 'string') return constants[ast.key.value];
+      fail();
+    };
+    try {
+      for (let pos = 0; pos < code.length;) {
+        if ('\'"`'.includes(code[pos])) { pos = quotedEnd(code, pos); continue; }
+        if (code.startsWith('//', pos)) { const end = code.indexOf('\n', pos + 2); pos = end < 0 ? code.length : end + 1; continue; }
+        if (code.startsWith('/*', pos)) { const end = code.indexOf('*/', pos + 2); if (end < 0) fail(); pos = end + 2; continue; }
+        // Do not mistake a regex literal for executable component syntax. This
+        // deliberately declines programs needing a full JavaScript tokenizer.
+        if (code[pos] === '/') return [];
+        const call = code[pos] === '_' && !/[\w$.]/.test(code[pos - 1] || '') &&
+          code.slice(pos).match(/^__dil\s*\.\s*jsx\s*\(\s*AsyncImage\s*,\s*(?=\{)/);
+        if (!call) { pos++; continue; }
+        const start = pos + call[0].length, end = balancedEnd(code, start);
+        if (!/^\s*[,)]/.test(code.slice(end))) fail();
+        const props = expression(code.slice(start, end));
+        if (props.type !== 'object') fail();
+        const attrs = new Map(props.items);
+        bindings.push({ query: savedString(attrs.get('query')), id: savedString(attrs.get('__resolutionId')) });
+        if (bindings.length > 4096) fail();
+        pos = end;
+      }
+      return bindings;
+    } catch (_) { return []; }
+  }
+  window.ChatArchiveComponents = { starts, read, render, Unsupported, escape, inline, imageBindings };
 })();

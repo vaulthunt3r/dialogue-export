@@ -1,0 +1,10 @@
+<box gap={2}>
+  <text color="secondary" weight="medium" size="xs">REUSABLE PROMPT</text>
+  <box background="surface-secondary" radius="lg" padding={3} gap={3}>
+    {@body const prompt = "First paragraph.\n\nSecond paragraph with two  spaces.\n  Indented line.\n\nLiteral <script>text</script> and **asterisks**."}
+    <text size="sm" preserveWhitespace>{prompt}</text>
+    <row justify="end">
+      <button size="sm" color="secondary" variant="outline" onClick={()=>GenUI.copy(prompt)}><icon name="copy" size="xs"/> Copy prompt</button>
+    </row>
+  </box>
+</box>

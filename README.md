@@ -4,9 +4,9 @@
 
 A Firefox extension for exporting a conversation to **TXT, Markdown, HTML, JSON or PDF**, and saving multiple ChatGPT conversations in a **ZIP archive**. Compact monochrome controls, readable output and local processing.
 
-**[Install 0.5.8 — Mozilla-signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.8/Dialogue-Export-v0.5.8-signed.xpi)** · [All release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.8) · [What's new](docs/RELEASE-v0.5.8.md)
+**[Install 0.5.9 — Mozilla-signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.9/Dialogue-Export-v0.5.9-signed.xpi)** · [All release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.9) · [What's new](docs/RELEASE-v0.5.9.md)
 
-**New in 0.5.8:** direct static cards and SVG diagrams, image galleries, early image-access checks, retry and partial-save handling. The maintainer confirmed all images saved in 66 HTML parts. [Release notes and validation](docs/RELEASE-v0.5.8.md).
+**New in 0.5.9:** fixes for saved image references and prompt cards, expanded static layouts and citations, preserved status icons and thin separators. No new permissions. [Release notes and validation](docs/RELEASE-v0.5.9.md) · [Signing record](docs/AMO_SUBMISSION-v0.5.9.md).
 
 ## See it in a minute
 
