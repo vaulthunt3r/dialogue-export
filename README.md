@@ -2,6 +2,8 @@
 
 **Keep your ChatGPT conversations. In files you can use.**
 
+**[Project website · Русский / English](https://vaulthunt3r.github.io/dialogue-export/)** — features, video tour and installation.
+
 A Firefox extension for exporting a conversation to **TXT, Markdown, HTML, JSON or PDF**, and saving multiple ChatGPT conversations in a **ZIP archive**. Compact monochrome controls, readable output and local processing.
 
 **[Install 0.5.9 — Mozilla-signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.9/Dialogue-Export-v0.5.9-signed.xpi)** · [All release files](https://github.com/vaulthunt3r/dialogue-export/releases/tag/v0.5.9) · [What's new](docs/RELEASE-v0.5.9.md)
@@ -63,7 +65,7 @@ Unsupported chats are skipped while the others continue. If a later read error s
 
 ## Install and start
 
-1. Download the [signed XPI](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.8/Dialogue-Export-v0.5.8-signed.xpi), open it in **Firefox 142 or later** and confirm installation.
+1. Download the signed XPI from the [latest release](https://github.com/vaulthunt3r/dialogue-export/releases/latest), open it in **Firefox 142 or later** and confirm installation.
 2. Open or reload a ChatGPT conversation. Click the dialogue icon in the page margin or on the Firefox toolbar.
 3. Choose your messages and format, review **Export options**, then press **Export** or **Prepare PDF**. Keep the source tab open until collection finishes.
 
