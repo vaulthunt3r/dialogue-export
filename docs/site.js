@@ -6,7 +6,7 @@
     heroDescription: 'Ideas, code, and useful answers. In files that stay with you. Export the whole conversation or just the messages you need.',
     download: 'Install in Firefox', watch: 'Watch the one-minute tour', requirements: 'Free · Open source · Firefox 142+', formats: 'Export formats', zipTiny: 'chat archive',
     demoTitle: 'See it in action', demoDuration: '60 SECONDS · SOUND ON', videoLabel: 'Dialogue Export feature tour', downloadVideo: 'Download video',
-    demoNote: 'Version 0.5.6 tour with fictional conversations. The image source, size, and quality caption option was removed in later versions.',
+    demoNote: 'A one-minute tour of message selection, images, PDF, and ZIP archives. All conversations shown are fictional.',
     featuresTitle: 'From conversation to document', featureFirst: 'The useful parts.', featureSecond: 'In a format that fits.',
     readableTitle: 'Open it. Pick up where you left off.', readableText: 'HTML for reading, PDF for printing, Markdown for your notes. TXT and JSON when you need plain text or structured data.',
     richTitle: 'Code, tables, and images, too.', richText: 'Keep formatting and supported images in HTML and PDF. Choose images from your messages and AI responses separately.',

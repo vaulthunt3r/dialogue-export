@@ -12,11 +12,11 @@ A Firefox extension for exporting a conversation to **TXT, Markdown, HTML, JSON 
 
 ## See it in a minute
 
-https://github.com/user-attachments/assets/c4a84b92-d3b3-4237-879a-082efc998ac2
+https://github.com/user-attachments/assets/e546dcfa-6d1d-44d6-9456-a7b1ca0c2a5e
 
-**[Watch the 60-second tour](https://github.com/user-attachments/assets/c4a84b92-d3b3-4237-879a-082efc998ac2)** · [Download MP4](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.6/Dialogue-Export-0.5.6-trailer-EN.mp4)
+**[Watch the 60-second tour](https://github.com/user-attachments/assets/e546dcfa-6d1d-44d6-9456-a7b1ca0c2a5e)** · [Watch with EN/RU subtitles](https://vaulthunt3r.github.io/dialogue-export/#demo) · [Download MP4](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.9/Dialogue-Export-trailer-EN.mp4)
 
-English titles and original music. This 0.5.6 feature tour uses fictional conversations and demonstration data; its image-details setting was removed in 0.5.7.
+English titles and original music, with English captions and Russian subtitles on the website. Refreshed November 28, 2026 with current menu screens and no version number. All conversations and report counts are fictional demonstrations.
 
 ## What you can save
 
@@ -98,6 +98,6 @@ From the source archive, run `npm ci --ignore-scripts` and `npm test`. Runtime f
 
 The direct-reading approach was inspired by **[John2022 / ChatGPT Conversation Export](https://github.com/John2022/chatgpt-conversation-export)**. Thank you for demonstrating the benefit of retrieving conversation data directly. Dialogue Export combines direct reading with its existing page collector, validation, output formats and archive workflow. [markdown-it](https://github.com/markdown-it/markdown-it) handles Markdown rendering locally; dependency and icon notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-[MIT License](LICENSE) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Trailer sources](promo/0.5.6/README.md)
+[MIT License](LICENSE) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Trailer sources](promo/tour/README.md)
 
 Created by **vaulthunt3r**. Independent project; not affiliated with or endorsed by OpenAI or Google.
