@@ -9,7 +9,7 @@ All chats, document contents and report counts are fictional. Screens were captu
 ## Watch and download
 
 - [Watch on the project website](https://vaulthunt3r.github.io/dialogue-export/#demo)
-- [Download MP4](https://vaulthunt3r.github.io/dialogue-export/media/Dialogue-Export-trailer-EN.mp4)
+- [Download MP4](https://github.com/vaulthunt3r/dialogue-export/releases/download/v0.5.9/Dialogue-Export-trailer-EN.mp4)
 - [English captions](../../docs/media/tour.en.vtt) · [Russian subtitles](../../docs/media/tour.ru.vtt)
 
 ## Reproduce
@@ -25,4 +25,4 @@ python promo/tour/render.py
 
 To refresh UI captures, run `node promo/tour/prepare.cjs`, serve the repository with a local HTTP server and open `promo/tour/output/preview/`. The script only prepares fictional pages; it does not launch a browser. Capture the menu pages at 440×880, with the PDF settings scrolled enough to show compact pagination. Capture the archive at width 1200 with the Save ZIP section visible. Store JPEG captures in `assets/` using the existing names. Verify framing with `--preview` before encoding. The movie crops/pans the archive image within its frame.
 
-Keep `docs/media/Dialogue-Export-trailer-EN.mp4`, the tour poster and both subtitle tracks in sync. The site uses a media revision query to refresh cached captions. GitHub README uses a playable uploaded video attachment; replace its URL when publishing a new cut. Historical versioned trailers remain archival.
+Keep the GitHub Releases MP4 and its mirror in `docs/media/Dialogue-Export-trailer-EN.mp4`, the tour poster and both subtitle tracks in sync. The site streams the release asset and uses a media revision query to refresh cached captions. GitHub README uses a playable uploaded video attachment; replace its URL when publishing a new cut. Historical versioned trailers remain archival.
